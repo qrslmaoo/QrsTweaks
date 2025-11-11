@@ -1,0 +1,125 @@
+/* ===========================
+   QrsTweaks Glass Neon Theme
+   ===========================
+   Palette
+   bg      #0F1116
+   surface #151820
+   glass   rgba(21,24,32,0.82)
+   line    #20242F
+   text    #DDE1EA
+   sub     #AAB0BD
+   accent  #5A7DFF
+   success #4DFF87
+   warn    #FFC857
+   danger  #FF4D6D
+*/
+
+* { color: #DDE1EA; selection-background-color: #2B3250; selection-color: #ffffff; }
+
+QWidget { background: transparent; font-family: "Segoe UI", "Inter", "Arial"; font-size: 10.5pt; }
+
+/* Chrome container (frameless_window.py) */
+#Chrome {
+  background: rgba(15,17,22,0.92);
+  border-radius: 16px;
+  border: 1px solid #20242F;
+}
+
+/* Sidebar */
+#Sidebar {
+  background: rgba(17,19,26,0.92);
+  border-radius: 18px;
+  border: 1px solid #20242F;
+}
+
+/* Sidebar buttons */
+QPushButton.SidebarBtn {
+  background: transparent;
+  border: none;
+  padding: 12px 16px;
+  text-align: left;
+  color: #AAB0BD;
+  font-size: 11pt;
+  font-weight: 500;
+  border-radius: 10px;
+}
+QPushButton.SidebarBtn:hover {
+  background: rgba(110,140,255,0.10);
+}
+QPushButton.SidebarBtn:checked {
+  background: rgba(110,140,255,0.22);
+  color: #ffffff;
+}
+
+/* Universal buttons */
+QPushButton {
+  background: #1A1D26;
+  border: 1px solid #2A2E38;
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+QPushButton:hover {
+  border-color: #5A7DFF;
+}
+QPushButton:pressed {
+  background: #0F1116;
+}
+
+/* Inputs */
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
+  background: #161B24;
+  border: 1px solid #23293A;
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: #DDE1EA;
+}
+
+/* Cards */
+#Card {
+  background: rgba(22,25,33,0.85);
+  border: 1px solid #20242F;
+  border-radius: 16px;
+}
+#Card QLabel[cardTitle="true"] {
+  color: #DDE1EA;
+  font-size: 12.5pt;
+  font-weight: 600;
+  padding: 2px 2px 8px 2px;
+}
+
+/* Stat Chips */
+.StatChip {
+  background: #131823;
+  border: 1px solid #2A2E38;
+  border-radius: 12px;
+  padding: 6px 10px;
+  color: #AAB0BD;
+}
+.StatChip[ok="true"]     { border-color: rgba(77,255,135,0.55);  box-shadow: 0 0 0 1px rgba(77,255,135,0.15) inset; }
+.StatChip[warn="true"]   { border-color: rgba(255,200,87,0.65); box-shadow: 0 0 0 1px rgba(255,200,87,0.12) inset; }
+.StatChip[danger="true"] { border-color: rgba(255,77,109,0.65); box-shadow: 0 0 0 1px rgba(255,77,109,0.12) inset; }
+
+/* Neon edge accents (Vortex-like) */
+.Neon {
+  border: 1px solid #20242F;
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px rgba(90,125,255,0.25) inset,
+    0 0 18px rgba(90,125,255,0.18);
+}
+
+/* Glow spinner host */
+.GlowHost {
+  background: rgba(18,21,28,0.85);
+  border: 1px solid #20242F;
+  border-radius: 14px;
+}
+
+/* Scrollbars (subtle) */
+QScrollBar:vertical {
+  background: transparent; width: 10px; margin: 6px 2px 6px 2px;
+}
+QScrollBar::handle:vertical {
+  background: #2A3042; border-radius: 6px; min-height: 36px;
+}
+QScrollBar::handle:vertical:hover { background: #334066; }

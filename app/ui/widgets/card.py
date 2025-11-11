@@ -3,14 +3,17 @@ from PySide6.QtGui import QPainter, QColor, QPen
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel
 
 class Card(QFrame):
-    def __init__(self, title: str = "", parent=None):
+    def __init__(self, title: str = "", parent=None, glow=False):
         super().__init__(parent)
-        self._title = title
         self.setObjectName("Card")
-        self.setStyleSheet("""
-        #Card { background: rgba(21, 26, 36, 180); border: 1px solid #232838; border-radius: 12px; }
-        #Card QLabel[cardTitle="true"] { color: #dfe3ea; font-weight: 600; letter-spacing: 0.2px; }
-        """)
+        if glow:
+            self.setProperty("glow", "true")
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(14, 12, 14, 14)
+        if title:
+            t = QLabel(title, self); t.setProperty("cardTitle", "true")
+            self._layout.addWidget(t)
+
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(14, 12, 14, 14)
         if title:

@@ -1,6 +1,7 @@
 from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QRectF, QSize
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush
 from PySide6.QtWidgets import QCheckBox
+from PySide6.QtCore import Property
 
 class Toggle(QCheckBox):
     def __init__(self, parent=None, *, on_text="", off_text=""):
@@ -26,7 +27,7 @@ class Toggle(QCheckBox):
 
     def getShift(self): return self._shift
     def setShift(self, v): self._shift = v; self.update()
-    shift = property(getShift, setShift)
+    shift = Property(float, getShift, setShift)
 
     def paintEvent(self, e):
         p = QPainter(self)
