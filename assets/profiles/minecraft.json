@@ -1,0 +1,8 @@
+{
+  "game": "Minecraft",
+  "actions": [
+    {"type": "jvm_arg", "append": ["-Xms2G", "-Xmx4G"]},
+    {"type": "cleanup", "target": "%APPDATA%/.minecraft/logs"}
+  ],
+  "notes": "Stub profile for demo."
+}

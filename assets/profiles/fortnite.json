@@ -1,0 +1,8 @@
+{
+  "game": "Fortnite",
+  "actions": [
+    {"type": "config", "path": "%LOCALAPPDATA%/FortniteGame/Saved/Config/WindowsClient/GameUserSettings.ini", "set": {"bUseVSync": false, "FrameRateLimit": 240}},
+    {"type": "cleanup", "target": "%LOCALAPPDATA%/FortniteGame/Saved/Demos"}
+  ],
+  "notes": "Stub profile. Extend with real file edits in GameOptimizer.apply_profile."
+}
