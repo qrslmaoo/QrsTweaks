@@ -75,10 +75,10 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
 }
 
 /* Cards */
-#Card {
-  background: rgba(22,25,33,0.85);
-  border: 1px solid #20242F;
-  border-radius: 16px;
+QFrame#Card {
+    background: rgba(22,25,33,0.85);
+    border: 1px solid #20242F;
+    border-radius: 16px;
 }
 #Card QLabel[cardTitle="true"] {
   color: #DDE1EA;
@@ -100,12 +100,12 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
 .StatChip[danger="true"] { border-color: rgba(255,77,109,0.65); box-shadow: 0 0 0 1px rgba(255,77,109,0.12) inset; }
 
 /* Neon edge accents (Vortex-like) */
-.Neon {
-  border: 1px solid #20242F;
-  border-radius: 16px;
-  box-shadow:
-    0 0 0 1px rgba(90,125,255,0.25) inset,
-    0 0 18px rgba(90,125,255,0.18);
+QFrame.Neon {
+    border: 1px solid #20242F;
+    border-radius: 16px;
+    box-shadow:
+        0 0 0 1px rgba(90,125,255,0.25) inset,
+        0 0 18px rgba(90,125,255,0.18);
 }
 
 /* Glow spinner host */

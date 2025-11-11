@@ -1,129 +1,117 @@
+# app/ui/frameless_window.py
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame
+)
 from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QFrame
-
-from .win_blur import enable_acrylic
+from PySide6.QtGui import QMouseEvent
 
 
-class TitleBar(QFrame):
-    def __init__(self, parent=None, title="QrsTweaks Suite"):
+class TitleBar(QWidget):
+    def __init__(self, parent):
         super().__init__(parent)
-
-        self.setObjectName("TitleBar")
-        self.setFixedHeight(40)
         self._drag_pos = None
-
-        self.setStyleSheet("""
-        #TitleBar {
-            background: transparent;
-        }
-        QPushButton#WinBtn {
-            border: none;
-            padding: 6px;
-            border-radius: 6px;
-        }
-        QPushButton#WinBtn:hover {
-            background: rgba(255,255,255,0.1);
-        }
-        """)
+        self.setFixedHeight(40)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 0, 12, 0)
 
-        self.title = QLabel(title)
-        self.title.setStyleSheet("color: #e6e6e6; font-size: 11pt; font-weight: 600;")
-        self.title.setAttribute(Qt.WA_TransparentForMouseEvents)
-        layout.addWidget(self.title)
+        self.label = QLabel("QrsTweaks Suite")
+        self.label.setStyleSheet("color:#DDE1EA; font-size:11pt; font-weight:600;")
+        layout.addWidget(self.label)
         layout.addStretch()
 
-        # Window control buttons
-        self.btn_min = QPushButton("–")
-        self.btn_min.setObjectName("WinBtn")
-
+        self.btn_min = QPushButton("-")
         self.btn_max = QPushButton("□")
-        self.btn_max.setObjectName("WinBtn")
-
         self.btn_close = QPushButton("✕")
-        self.btn_close.setObjectName("WinBtn")
 
-        layout.addWidget(self.btn_min)
-        layout.addWidget(self.btn_max)
-        layout.addWidget(self.btn_close)
+        for b in (self.btn_min, self.btn_max, self.btn_close):
+            b.setFixedSize(32, 32)
+            b.setFlat(True)
+            b.setStyleSheet("""
+                QPushButton {
+                    background: rgba(255,255,255,0.06);
+                    border-radius: 6px;
+                }
+                QPushButton:hover {
+                    background: rgba(255,255,255,0.15);
+                }
+            """)
+            layout.addWidget(b)
 
-        # Connect actions
-        self.btn_min.clicked.connect(self._minimize)
-        self.btn_max.clicked.connect(self._maximize)
-        self.btn_close.clicked.connect(self._close)
+        self.btn_close.clicked.connect(self.window().close)
+        self.btn_min.clicked.connect(self.window().showMinimized)
+        self.btn_max.clicked.connect(parent.toggle_max)
 
-    def _minimize(self):
-        self.window().showMinimized()
+    # ===== DRAGGING REAL WINDOW =====
+    def mousePressEvent(self, e: QMouseEvent):
+        if e.button() == Qt.LeftButton:
+            self._drag_pos = e.globalPosition().toPoint() - self.window().frameGeometry().topLeft()
 
-    def _maximize(self):
-        w = self.window()
-        if w.isMaximized():
-            w.showNormal()
-        else:
-            w.showMaximized()
+    def mouseMoveEvent(self, e: QMouseEvent):
+        if self._drag_pos and (e.buttons() & Qt.LeftButton):
+            self.window().move(e.globalPosition().toPoint() - self._drag_pos)
 
-    def _close(self):
-        self.window().close()
-
-    # Drag behavior
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.window().frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self._drag_pos and event.buttons() & Qt.LeftButton:
-            self.window().move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, e: QMouseEvent):
         self._drag_pos = None
-        super().mouseReleaseEvent(event)
 
 
 class FramelessWindow(QWidget):
-    def __init__(self, central_widget: QWidget, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        # ----------------------------------
+        # BASIC WINDOW FLAGS
+        # ----------------------------------
+        self.setWindowFlags(
+            Qt.FramelessWindowHint |
+            Qt.WindowSystemMenuHint |
+            Qt.WindowMinMaxButtonsHint
+        )
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
+        self._maximized = False
 
-        self._chrome = QFrame()
-        self._chrome.setObjectName("Chrome")
-        self._chrome.setStyleSheet("""
-        #Chrome {
-            background: rgba(15, 17, 21, 255);
-            border-radius: 14px;
-            border: 1px solid #20263a;
-        }
+        # ----------------------------------
+        # MAIN LAYOUT (chrome + content)
+        # ----------------------------------
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        chrome = QWidget()
+        chrome.setObjectName("Chrome")
+        chrome.setStyleSheet("""
+            #Chrome {
+                background: rgba(20,20,24,0.70);
+                border-radius: 12px;
+            }
         """)
 
-        outer.addWidget(self._chrome)
+        chrome_layout = QVBoxLayout(chrome)
+        chrome_layout.setContentsMargins(0, 0, 0, 0)
+        chrome_layout.setSpacing(0)
 
-        chrome_layout = QVBoxLayout(self._chrome)
-        chrome_layout.setContentsMargins(8, 8, 8, 8)
+        # Title bar
+        self.titlebar = TitleBar(self)
+        chrome_layout.addWidget(self.titlebar)
 
-        # Titlebar + content
-        self.title_bar = TitleBar(self._chrome)
-        chrome_layout.addWidget(self.title_bar)
-        chrome_layout.addWidget(central_widget, 1)
+        # Content Container
+        self.center = QWidget()
+        self.center.setObjectName("Center")
+        self.center.setStyleSheet("background: transparent;")
+        chrome_layout.addWidget(self.center)
 
-        # Apply blur ONCE
-        self._blur_applied = False
+        root.addWidget(chrome)
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        if not self._blur_applied:
-            try:
-                hwnd = int(self.winId())
-                enable_acrylic(hwnd, 0xAA18202B, acrylic=False)
-            except Exception:
-                pass
-            self._blur_applied = True
+    # =====================================================
+    #         MAXIMIZE / RESTORE
+    # =====================================================
+    def toggle_max(self):
+        if not self._maximized:
+            self._old_geometry = self.geometry()
+            self.showMaximized()
+            self._maximized = True
+        else:
+            self.showNormal()
+            self.setGeometry(self._old_geometry)
+            self._maximized = False

@@ -1,46 +1,68 @@
-import json, os
-from pathlib import Path
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QListWidget, QListWidgetItem, QVBoxLayout, QLabel, QTextEdit, QPushButton, QMessageBox
-from src.qrs.modules.game_optim import GameOptimizer
-from app.ui.widgets.card import Card
+# app/pages/games_page.py
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+)
+from PySide6.QtCore import Qt
 
-ROOT = Path(__file__).resolve().parents[2]
+from app.ui.widgets.card import Card
+from app.ui.animations import fade_in, slide_in_y
+from src.qrs.modules.game_optim import GameOptimizer
+
 
 class GamesPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.game = GameOptimizer(profiles_dir=ROOT / "assets" / "profiles")
 
-        root = QHBoxLayout(self); root.setContentsMargins(4,4,4,4); root.setSpacing(10)
+        self.opt = GameOptimizer()
 
-        left_card = Card("Profiles")
-        lv = QVBoxLayout(); left_card.setLayout(lv)  # override to simple container
-        self.list_profiles = QListWidget()
-        for n in self.game.list_profiles():
-            QListWidgetItem(n, self.list_profiles)
-        lv.addWidget(self.list_profiles)
-        root.addWidget(left_card, 1)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(18)
 
-        right_card = Card("Profile Details")
-        rv = right_card.body()
-        self.preview = QTextEdit(); self.preview.setReadOnly(True)
-        b_apply = QPushButton("Apply Profile")
-        b_open = QPushButton("Open Profiles Folder")
-        b_apply.clicked.connect(self._apply)
-        b_open.clicked.connect(lambda: os.startfile(self.game.profiles_dir))
-        rv.addWidget(self.preview); rv.addWidget(b_apply); rv.addWidget(b_open)
-        root.addWidget(right_card, 2)
+        header = QLabel("Game Optimizer")
+        header.setStyleSheet("color:#DDE1EA; font-size:22pt; font-weight:700;")
+        header.setAlignment(Qt.AlignLeft)
+        root.addWidget(header)
 
-        self.list_profiles.currentItemChanged.connect(self._select)
+        # --------------- Game Cards ---------------
+        row = QHBoxLayout()
+        row.setSpacing(18)
 
-    def _select(self, item):
-        if not item:
-            self.preview.clear(); return
-        data = self.game.load_profile(item.text())
-        self.preview.setPlainText(json.dumps(data, indent=2))
+        fort = Card("Fortnite Optimizer")
+        fv = fort.body()
 
-    def _apply(self):
-        it = self.list_profiles.currentItem()
-        if not it: return
-        ok, msg = self.game.apply_profile(it.text())
-        QMessageBox.information(self, "Apply Profile", msg if ok else f"Failed: {msg}")
+        self.btn_fps = QPushButton("Enable FPS Boost")
+        self.btn_net = QPushButton("Low Latency Mode")
+        self.btn_cfg = QPushButton("Apply Fortnite Config")
+
+        fv.addWidget(self.btn_fps)
+        fv.addWidget(self.btn_net)
+        fv.addWidget(self.btn_cfg)
+
+        mc = Card("Minecraft Optimizer")
+        mv = mc.body()
+
+        self.btn_mc_r = QPushButton("Reduce Lag (1.8–1.21)")
+        self.btn_mc_opt = QPushButton("Apply Sodium/Lithium")
+
+        mv.addWidget(self.btn_mc_r)
+        mv.addWidget(self.btn_mc_opt)
+
+        row.addWidget(fort)
+        row.addWidget(mc)
+
+        root.addLayout(row)
+        root.addStretch()
+
+        # Signals
+        self.btn_fps.clicked.connect(lambda: self.opt.fortnite_fps_boost())
+        self.btn_net.clicked.connect(lambda: self.opt.fortnite_net_tweak())
+        self.btn_cfg.clicked.connect(lambda: self.opt.apply_fortnite_cfg())
+
+        self.btn_mc_r.clicked.connect(lambda: self.opt.minecraft_reduce_lag())
+        self.btn_mc_opt.clicked.connect(lambda: self.opt.minecraft_sodium_opt())
+
+        # Animations
+        for card in (fort, mc):
+            fade_in(card)
+            slide_in_y(card)

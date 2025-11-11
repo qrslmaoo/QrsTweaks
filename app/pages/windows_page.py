@@ -1,112 +1,229 @@
+# app/pages/windows_page.py
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit, QLabel, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QTextEdit, QLabel
 )
-from PySide6.QtGui import QColor
-from src.qrs.modules.windows_optim import WindowsOptimizer
+from PySide6.QtCore import Qt
+
 from app.ui.widgets.card import Card
 from app.ui.widgets.toggle import Toggle
 from app.ui.widgets.glow_indicator import GlowIndicator
 from app.ui.animations import fade_in, slide_in_y
+from src.qrs.modules.windows_optim import WindowsOptimizer
 
-class Chip(QLabel):
-    def __init__(self, text, kind="ok", parent=None):
-        super().__init__(text, parent)
-        self.setProperty("class", "StatChip")
-        if kind == "ok": self.setProperty("ok", True)
-        if kind == "warn": self.setProperty("warn", True)
-        if kind == "danger": self.setProperty("danger", True)
-        self.setStyleSheet("")  # re-polish
 
 class WindowsPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+
         self.opt = WindowsOptimizer()
 
-        root = QVBoxLayout(self); root.setContentsMargins(6,6,6,6); root.setSpacing(10)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(18)
 
-        # Header / hero
-        header = QLabel("Windows Optimization")
-        header.setStyleSheet("color:#DDE1EA; font-size:20pt; font-weight:700;")
+        # ---------------- Header ----------------
+        header = QLabel("Windows Optimizer")
+        header.setStyleSheet("color:#DDE1EA; font-size:22pt; font-weight:700;")
+        header.setAlignment(Qt.AlignLeft)
         root.addWidget(header)
 
-        # Status chips row
-        rowchips = QHBoxLayout(); rowchips.setSpacing(8)
-        self.chip_os = Chip("OS: —", "ok")
-        self.chip_free = Chip("Free: —", "warn")
-        self.chip_temp = Chip("Temp: —", "danger")
-        for c in (self.chip_os, self.chip_free, self.chip_temp):
-            w = QFrame(); w.setLayout(QHBoxLayout()); w.layout().setContentsMargins(10,6,10,6); w.setProperty("class","StatChip"); w.layout().addWidget(c)
-            rowchips.addWidget(w)
-        root.addLayout(rowchips)
+        # =======================================================
+        #                     SYSTEM SCAN CARD
+        # =======================================================
+        scan = Card("System Scan")
+        body = scan.body()
 
-        # Scan card
-        scan = Card("System Scan"); scan.setObjectName("Card")
-        sv = scan.body()
-        top = QHBoxLayout()
+        # Top row (Button + spinner)
+        row = QHBoxLayout()
         self.btn_scan = QPushButton("Run Quick Scan")
-        self.spinner = GlowIndicator(); self.spinner.hide()
-        top.addWidget(self.btn_scan); top.addStretch(); top.addWidget(self.spinner)
-        sv.addLayout(top)
+        self.spinner = GlowIndicator()
+        self.spinner.hide()
 
-        self.log = QTextEdit(); self.log.setReadOnly(True)
-        self.log.setFixedHeight(260)
-        self.log.setProperty("class", "Neon")
-        sv.addWidget(self.log)
+        row.addWidget(self.btn_scan)
+        row.addStretch()
+        row.addWidget(self.spinner)
 
-        # Action row (three cards)
-        row = QHBoxLayout(); row.setSpacing(14)
+        body.addLayout(row)
 
-        power = Card("Power Plan"); pv = power.body()
+        # Log window
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMinimumHeight(230)
+        body.addWidget(self.log)
+
+        root.addWidget(scan)
+
+        # =======================================================
+        #                       ROW 1
+        # =======================================================
+        row1 = QHBoxLayout()
+        row1.setSpacing(18)
+
+        # ----- Power Plan -----
+        power = Card("Power Plan")
+        pv = power.body()
+
         self.turbo = Toggle()
-        bpower = QPushButton("Create High Performance plan")
-        pv.addWidget(self.turbo); pv.addWidget(bpower)
+        self.btn_plan = QPushButton("Create High Performance Plan")
 
-        clean = Card("Cleanup"); cv = clean.body()
-        bclean = QPushButton("Clean Temp Files")
-        cv.addWidget(bclean)
+        pv.addWidget(self.turbo)
+        pv.addWidget(self.btn_plan)
 
-        restore = Card("Safety"); rv = restore.body()
-        bres = QPushButton("Create Restore Point")
-        rv.addWidget(bres)
+        # ----- Cleanup -----
+        clean = Card("Cleanup")
+        cv = clean.body()
 
-        row.addWidget(power); row.addWidget(clean); row.addWidget(restore)
-        root.addWidget(scan); root.addLayout(row); root.addStretch()
+        self.btn_clean = QPushButton("Clean Temp Files")
+        cv.addWidget(self.btn_clean)
 
-        # Wire
+        # ----- Safety -----
+        safety = Card("Safety")
+        sv = safety.body()
+
+        self.btn_restore = QPushButton("Create Restore Point")
+        sv.addWidget(self.btn_restore)
+
+        row1.addWidget(power)
+        row1.addWidget(clean)
+        row1.addWidget(safety)
+        root.addLayout(row1)
+
+        # =======================================================
+        #                       ROW 2
+        # =======================================================
+        row2 = QHBoxLayout()
+        row2.setSpacing(18)
+
+        # ----- Memory Leak Protector -----
+        leak = Card("Memory-Leak Protector")
+        lv = leak.body()
+
+        self.btn_ml_start = QPushButton("Start (Fortnite, 1024 MB)")
+        self.btn_ml_stop = QPushButton("Stop")
+
+        lv.addWidget(self.btn_ml_start)
+        lv.addWidget(self.btn_ml_stop)
+
+        # ----- Network Optimizer -----
+        net = Card("Network Optimizer")
+        nv = net.body()
+
+        self.btn_dns_cf = QPushButton("Set DNS: 1.1.1.1 / 1.0.0.1")
+        self.btn_dns_gg = QPushButton("Set DNS: 8.8.8.8 / 8.8.4.4")
+        self.btn_ctcp_on = QPushButton("Enable CTCP")
+        self.btn_ctcp_off = QPushButton("Disable CTCP")
+        self.btn_auto_norm = QPushButton("TCP Autotuning: normal")
+        self.btn_auto_restr = QPushButton("TCP Autotuning: restricted")
+        self.btn_nagle_off = QPushButton("Disable Nagle (gaming)")
+        self.btn_ping = QPushButton("Latency test (1.1.1.1)")
+
+        for w in (
+            self.btn_dns_cf, self.btn_dns_gg,
+            self.btn_ctcp_on, self.btn_ctcp_off,
+            self.btn_auto_norm, self.btn_auto_restr,
+            self.btn_nagle_off, self.btn_ping
+        ):
+            nv.addWidget(w)
+
+        # ----- Startup Optimizer -----
+        startup = Card("Startup Optimizer")
+        st = startup.body()
+
+        self.btn_list_startup = QPushButton("List Startup Entries")
+        st.addWidget(self.btn_list_startup)
+
+        row2.addWidget(leak)
+        row2.addWidget(net)
+        row2.addWidget(startup)
+        root.addLayout(row2)
+
+        # Stretch bottom
+        root.addStretch()
+
+        # ================= SIGNALS ==================
         self.btn_scan.clicked.connect(self._scan)
-        bpower.clicked.connect(self._power)
-        bclean.clicked.connect(self._clean)
-        bres.clicked.connect(self._restore)
+        self.btn_plan.clicked.connect(self._plan)
+        self.btn_clean.clicked.connect(self._clean)
+        self.btn_restore.clicked.connect(self._restore)
 
-        # gentle entrance
-        fade_in(scan); slide_in_y(scan); slide_in_y(power); slide_in_y(clean); slide_in_y(restore)
+        self.btn_ml_start.clicked.connect(self._ml_start)
+        self.btn_ml_stop.clicked.connect(self._ml_stop)
 
+        self.btn_dns_cf.clicked.connect(lambda: self._dns("1.1.1.1", "1.0.0.1"))
+        self.btn_dns_gg.clicked.connect(lambda: self._dns("8.8.8.8", "8.8.4.4"))
+        self.btn_ctcp_on.clicked.connect(lambda: self._ctcp(True))
+        self.btn_ctcp_off.clicked.connect(lambda: self._ctcp(False))
+        self.btn_auto_norm.clicked.connect(lambda: self._autotune("normal"))
+        self.btn_auto_restr.clicked.connect(lambda: self._autotune("restricted"))
+        self.btn_nagle_off.clicked.connect(self._nagle_off)
+        self.btn_ping.clicked.connect(self._ping)
+
+        self.btn_list_startup.clicked.connect(self._startup_list)
+
+        # ================= ANIMATIONS ==================
+        for card in (scan, power, clean, safety, leak, net, startup):
+            fade_in(card)
+            slide_in_y(card)
+
+    # ================= LOGIC ==================
     def _scan(self):
         self.spinner.show()
         self.log.clear()
-        report = self.opt.quick_scan()
-        self.log.setPlainText(report)
-        # update chips from report lines
-        lines = {k.strip(): v.strip() for k,v in (l.split(":",1) for l in report.splitlines() if ":" in l)}
-        self.chip_os.setText(f"OS: {lines.get('OS','—')}")
-        self.chip_free.setText(f"Free: {lines.get('System drive free','—')}")
-        # crude temp risk
-        try:
-            temp_line = [l for l in report.splitlines() if l.lower().startswith("temp files")][0]
-            count = int(''.join(ch for ch in temp_line if ch.isdigit()))
-            self.chip_temp.setText(f"Temp: {count}")
-        except Exception:
-            pass
+        self.log.append(self.opt.quick_scan())
         self.spinner.hide()
 
-    def _power(self):
+    def _plan(self):
         ok, msg = self.opt.create_high_perf_powerplan()
         self.log.append(f"[Power] {msg}")
 
     def _clean(self):
-        n = self.opt.cleanup_temp_files()
-        self.log.append(f"[Cleanup] Removed ~{n} temp files.")
+        removed = self.opt.cleanup_temp_files()
+        self.log.append(f"[Cleanup] Removed ~{removed} temp files.")
 
     def _restore(self):
         ok, msg = self.opt.create_restore_point("QrsTweaks Snapshot")
-        self.log.append(f"[Restore] {msg if ok else 'Failed: ' + msg}")
+        self.log.append(f"[Restore] {msg}")
+
+    # Memory Leak Protector
+    def _ml_start(self):
+        ok, msg = self.opt.start_memleak_protector(
+            process_names=["FortniteClient-Win64-Shipping.exe"],
+            mb_threshold=1024
+        )
+        self.log.append(f"[MemLeak] {msg}")
+
+    def _ml_stop(self):
+        ok, msg = self.opt.stop_memleak_protector()
+        self.log.append(f"[MemLeak] {msg}")
+
+    # Network Optimizer
+    def _dns(self, a, b):
+        ok, msg = self.opt.set_dns(primary=a, secondary=b)
+        self.log.append(f"[DNS] {msg}")
+
+    def _ctcp(self, enable):
+        ok, msg = self.opt.enable_ctcp(enable)
+        self.log.append(f"[CTCP] {msg}")
+
+    def _autotune(self, mode):
+        ok, msg = self.opt.autotuning(mode)
+        self.log.append(f"[TCP] {msg}")
+
+    def _nagle_off(self):
+        ok, msg = self.opt.toggle_nagle(False)
+        self.log.append(f"[Nagle] {msg}")
+
+    def _ping(self):
+        ok, out = self.opt.latency_ping("1.1.1.1", 5)
+        self.log.append(out)
+
+    # Startup
+    def _startup_list(self):
+        entries = self.opt.list_startup_entries()
+        if not entries:
+            self.log.append("[Startup] No items found.")
+            return
+        self.log.append("[Startup]")
+        for loc, name, val in entries:
+            self.log.append(f"  - {name} @ {loc} => {val}")

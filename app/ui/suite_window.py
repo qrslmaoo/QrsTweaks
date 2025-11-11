@@ -1,138 +1,160 @@
-from PySide6.QtCore import Qt, QPropertyAnimation
+# app/ui/suite_window.py
+from shiboken6 import delete
+
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QStackedWidget, QFrame, QLabel
+    QWidget, QHBoxLayout, QVBoxLayout,
+    QLabel, QPushButton, QScrollArea
 )
-from PySide6.QtGui import QIcon
-from pathlib import Path
+from PySide6.QtCore import Qt
 
-from .frameless_window import FramelessWindow
-
-
-ROOT = Path(__file__).resolve().parents[2]
-ICON_DIR = ROOT / "assets" / "icons"
-
-
-class SidebarButton(QPushButton):
-    def __init__(self, icon: str, text: str, index: int, controller):
-        super().__init__(text)
-        self.index = index
-        self.controller = controller
-
-        self.setCursor(Qt.PointingHandCursor)
-        self.setCheckable(True)
-        self.setIcon(QIcon(str(ICON_DIR / icon)))
-        self.setIconSize(self.iconSize())
-
-        self.setStyleSheet("""
-QPushButton {
-    background: transparent;
-    border: none;
-    padding: 12px 16px;
-    text-align: left;
-    color: #AAB0BD;
-    font-size: 11pt;
-    border-radius: 10px;
-    font-weight: 500;
-}
-QPushButton:hover {
-    background: rgba(110,140,255,0.08);
-}
-QPushButton:checked {
-    background: rgba(110,140,255,0.22);
-    color: #ffffff;
-}
-""")
-
-
-    def iconSize(self):
-        from PySide6.QtCore import QSize
-        return QSize(20, 20)
-
-    def mousePressEvent(self, event):
-        super().mousePressEvent(event)
-        self.controller.switch_page(self.index)
+from app.ui.frameless_window import FramelessWindow
+from app.pages.windows_page import WindowsPage
+from app.pages.games_page import GamesPage
+from app.pages.passwords_page import PasswordsPage
 
 
 class SuiteWindow(FramelessWindow):
-    def __init__(self, windows_page: QWidget, games_page: QWidget, passwords_page: QWidget):
-        # Build the central widget FIRST
-        central = QWidget()
-        super().__init__(central_widget=central)
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
-        main = QHBoxLayout(central)
-        main.setContentsMargins(6, 6, 6, 6)
-        main.setSpacing(8)
+        # ----------------------------------------------------------
+        # MAIN LAYOUT
+        # ----------------------------------------------------------
+        root = QHBoxLayout(self.center)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # ========== SIDEBAR ==========
-        sidebar = QFrame()
-        sidebar.setObjectName("Sidebar")
+        # ----------------------------------------------------------
+        # SIDEBAR
+        # ----------------------------------------------------------
+        sidebar = QWidget(objectName="Sidebar")
+        sidebar.setFixedWidth(220)
         sidebar.setStyleSheet("""
-#Sidebar {
-    background: #11131A;
-    border-radius: 18px;
-    border: 1px solid #20242F;
-}
-""")
-
+            #Sidebar {
+                background: rgba(255,255,255,0.06);
+            }
+        """)
 
         sb = QVBoxLayout(sidebar)
-        sb.setContentsMargins(10, 10, 10, 10)
-        sb.setSpacing(6)
+        sb.setContentsMargins(12, 20, 12, 20)
+        sb.setSpacing(12)
 
-        self.buttons = []
-        self.stack = QStackedWidget()
+        title = QLabel("QrsTweaks Suite")
+        title.setStyleSheet("color:#DDE1EA; font-size:14pt; font-weight:600;")
+        sb.addWidget(title)
+        sb.addSpacing(8)
 
-        entries = [
-            ("os.svg", "Windows Optimizer", windows_page),
-            ("gamepad.svg", "Game Optimizer", games_page),
-            ("lock.svg", "Password Manager", passwords_page),
-        ]
+        # Sidebar buttons
+        self.btn_win = QPushButton("  Windows Optimizer")
+        self.btn_games = QPushButton("  Games")
+        self.btn_pass = QPushButton("  Passwords")
 
-        # Build sidebar buttons + stack pages
-        for i, (icon, text, page) in enumerate(entries):
-            btn = SidebarButton(icon, text, i, controller=self)
-            self.buttons.append(btn)
-            sb.addWidget(btn)
-            self.stack.addWidget(page)
+        for b in (self.btn_win, self.btn_games, self.btn_pass):
+            b.setCursor(Qt.PointingHandCursor)
+            b.setCheckable(True)
+            b.setFixedHeight(40)
+            b.setStyleSheet("""
+                QPushButton {
+                    text-align: left;
+                    padding-left: 14px;
+                    background: rgba(255,255,255,0.08);
+                    color: #DDE1EA;
+                    border-radius: 8px;
+                    font-size: 11pt;
+                }
+                QPushButton:hover { background: rgba(255,255,255,0.16); }
+                QPushButton:checked { background: rgba(255,255,255,0.24); }
+            """)
+            sb.addWidget(b)
 
         sb.addStretch()
+        root.addWidget(sidebar)
 
-        # Optional settings button (disabled for now)
-        settings_btn = SidebarButton("settings.svg", "Settings", len(entries), controller=self)
-        settings_btn.setEnabled(False)
-        sb.addWidget(settings_btn)
+        # ----------------------------------------------------------
+        # SCROLL AREA
+        # ----------------------------------------------------------
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.setObjectName("ScrollArea")
+        self.scroll.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
 
-        # ========== MAIN AREA ==========
-        main.addWidget(sidebar)
-        main.addWidget(self.stack, 1)
+            QScrollBar:vertical {
+                width: 10px;
+                background: transparent;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(255,255,255,0.20);
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: rgba(255,255,255,0.35);
+            }
+            QScrollBar::add-line, QScrollBar::sub-line {
+                height: 0px;
+            }
+        """)
+        root.addWidget(self.scroll, 1)
 
-        # Default selection
-        self.buttons[0].setChecked(True)
-        self.stack.setCurrentIndex(0)
+        # ----------------------------------------------------------
+        # BUTTON CONNECTIONS
+        # ----------------------------------------------------------
+        self.btn_win.clicked.connect(lambda: self.load_page("win"))
+        self.btn_games.clicked.connect(lambda: self.load_page("games"))
+        self.btn_pass.clicked.connect(lambda: self.load_page("pass"))
 
-    # ========== PAGE SWITCHING WITH FADE ANIMATION ==========
-    def switch_page(self, index: int):
-        for b in self.buttons:
-            b.setChecked(False)
-        if index < len(self.buttons):
-            self.buttons[index].setChecked(True)
+        # ----------------------------------------------------------
+        # LOAD DEFAULT PAGE
+        # ----------------------------------------------------------
+        self.load_page("win")
 
-        new_page = self.stack.widget(index)
-        new_page.setWindowOpacity(0.0)
+    # ===================================================================
+    #           HARD DELETE TO PREVENT DUPLICATION + GHOST LAYERS
+    # ===================================================================
+    def _destroy_page(self):
+        old = self.scroll.takeWidget()
+        if old is not None:
+            old.setParent(None)
+            delete.delete(old)        # ✅ Immediate destruction (not delayed)
+            return True
+        return False
 
-        # Prevent memory leak: store animations
-        if not hasattr(self, "_animations"):
-            self._animations = []
+    # ===================================================================
+    #                           LOAD PAGE
+    # ===================================================================
+    def load_page(self, key: str):
 
-        anim = QPropertyAnimation(new_page, b"windowOpacity", self)
-        anim.setDuration(160)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.start()
+        # -------- DESTROY OLD PAGE IMMEDIATELY --------
+        self._destroy_page()
 
-        # Retain reference
-        self._animations.append(anim)
-        if len(self._animations) > 20:
-            self._animations.pop(0)
+        # -------- BUILD NEW PAGE --------
+        if key == "win":
+            page = WindowsPage()
+            self.btn_win.setChecked(True)
+            self.btn_games.setChecked(False)
+            self.btn_pass.setChecked(False)
 
-        self.stack.setCurrentIndex(index)
+        elif key == "games":
+            page = GamesPage()
+            self.btn_win.setChecked(False)
+            self.btn_games.setChecked(True)
+            self.btn_pass.setChecked(False)
+
+        else:
+            page = PasswordsPage()
+            self.btn_win.setChecked(False)
+            self.btn_games.setChecked(False)
+            self.btn_pass.setChecked(True)
+
+        # -------- WRAP PAGE IN A CONTAINER --------
+        container = QWidget()
+        lay = QVBoxLayout(container)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.setSpacing(20)
+        lay.addWidget(page)
+        lay.addStretch()
+
+        # -------- INSERT INTO SCROLLAREA --------
+        self.scroll.setWidget(container)

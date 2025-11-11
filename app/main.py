@@ -2,30 +2,28 @@ import sys
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
+# ---------------------------------------------------
+#  Project Root Setup
+# ---------------------------------------------------
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# Optional QSS theme
 QSS_PATH = ROOT / "app" / "qdark.qss"
-
-
-from app.ui.suite_window import SuiteWindow
-from app.pages.windows_page import WindowsPage
-from app.pages.games_page import GamesPage
-from app.pages.passwords_page import PasswordsPage
 
 
 def main():
     app = QApplication(sys.argv)
 
-    # Apply theme AFTER the app is created
+    # Load external stylesheet if present
     if QSS_PATH.exists():
         app.setStyleSheet(QSS_PATH.read_text(encoding="utf-8"))
 
-    win_page = WindowsPage()
-    game_page = GamesPage()
-    pass_page = PasswordsPage()
+    # Import after QApplication (PySide6 requirement)
+    from app.ui.suite_window import SuiteWindow
 
-    ui = SuiteWindow(win_page, game_page, pass_page)
+    # Create the window (NEW: no constructor arguments)
+    ui = SuiteWindow()
     ui.resize(1280, 780)
     ui.show()
 
