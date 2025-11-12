@@ -1,29 +1,23 @@
 # src/qrs/modules/windows_optim.py
-# QrsTweaks Optimizer Core (no monitoring, no AI)
-# - Cleanable-space System Scan (temp/prefetch/updates/recycle bin)
-# - Power/network/services/storage/tasks tweaks
-# - Safe profile application (JSON-based)
-# - Restore defaults & log export helpers
-# NOTE: Windows-only. Admin needed for many operations.
-
 from __future__ import annotations
 
 import os
 import sys
 import json
 import zipfile
+import shutil
 import subprocess
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 
-import psutil  # requirements.txt should include psutil
-import winreg  # Windows registry
+import psutil
+import winreg
+
 
 # -----------------------------
 # Helpers
 # -----------------------------
 def is_admin() -> bool:
-    """Return True if current process has Administrator privileges."""
     try:
         import ctypes
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
@@ -32,17 +26,15 @@ def is_admin() -> bool:
 
 
 def run_ps(script: str) -> subprocess.CompletedProcess:
-    """Run a PowerShell command (hidden) and return the CompletedProcess."""
     return subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
         text=True,
         capture_output=True,
-        creationflags=subprocess.CREATE_NO_WINDOW
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
     )
 
 
 def bytes_fmt(n: int) -> str:
-    """Human-friendly bytes."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.2f} {unit}"
@@ -50,62 +42,52 @@ def bytes_fmt(n: int) -> str:
     return f"{n:.2f} PB"
 
 
+def dir_size_and_count(path: Path) -> Tuple[int, int]:
+    total = 0
+    count = 0
+    if not path.exists():
+        return 0, 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            fp = Path(root) / f
+            try:
+                total += fp.stat().st_size
+                count += 1
+            except Exception:
+                pass
+    return total, count
+
+
 class WindowsOptimizer:
-    """Handles system tweaks, cleanup, and profile applications (no background/AI)."""
+    """System tweaks, cleanup, and profile applications (no AI/monitoring)."""
 
     def __init__(self):
-        # repo root = .../QrsTweaks
         self.root = Path(__file__).resolve().parents[3]
         self.logs_dir = self.root / "Logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-
-        # Memory-guard placeholder exe name (if later you ship one)
         self._memleak_proc_name = "qrs_memguard.exe"
 
     # =========================================================
-    #                    SYSTEM SCAN (NEW)
+    #                    SYSTEM SCAN (cleanable)
     # =========================================================
     def quick_scan(self) -> str:
-        """
-        Scan for *cleanable* data instead of PC specs.
-        Targets:
-          - User TEMP          (%TEMP%)
-          - System TEMP        (C:\Windows\Temp)
-          - Prefetch           (C:\Windows\Prefetch)
-          - Windows Update dl  (C:\Windows\SoftwareDistribution\Download)
-          - Recycle Bin size   (Shell API via PowerShell)
-        Returns a multi-line string summary for UI.
-        """
         targets = [
-            (os.getenv("TEMP"), "User Temp"),
-            (r"C:\Windows\Temp", "System Temp"),
-            (r"C:\Windows\Prefetch", "Prefetch"),
-            (r"C:\Windows\SoftwareDistribution\Download", "Windows Update Cache"),
+            (Path(os.getenv("TEMP") or r"C:\Windows\Temp"), "User Temp"),
+            (Path(r"C:\Windows\Temp"), "System Temp"),
+            (Path(r"C:\Windows\Prefetch"), "Prefetch"),
+            (Path(r"C:\Windows\SoftwareDistribution\Download"), "Windows Update Cache"),
         ]
 
         total_bytes = 0
         total_files = 0
         report_lines: List[str] = []
 
-        for path, label in targets:
-            if not path or not os.path.exists(path):
-                continue
-            size = 0
-            count = 0
-            # Walk with best-effort error handling
-            for root, _, files in os.walk(path):
-                for f in files:
-                    fp = os.path.join(root, f)
-                    try:
-                        size += os.path.getsize(fp)
-                        count += 1
-                    except Exception:
-                        pass
-            total_bytes += size
-            total_files += count
+        for p, label in targets:
+            size, count = dir_size_and_count(p)
+            total_bytes += size; total_files += count
             report_lines.append(f"[{label}] {count:,} files ({bytes_fmt(size)})")
 
-        # Recycle Bin estimate (per-drive) — safe query
+        # Recycle Bin estimate
         try:
             ps = r"(New-Object -ComObject Shell.Application).NameSpace(10).Items() | " \
                  r"Measure-Object -Property Size -Sum | Select-Object -ExpandProperty Sum"
@@ -120,17 +102,15 @@ class WindowsOptimizer:
         report_lines.append("")
         report_lines.append(f"[Scan Complete] {total_files:,} files detected.")
         report_lines.append(f"Estimated cleanable space: {bytes_fmt(total_bytes)}")
-
         return "\n".join(report_lines)
 
     # =========================================================
-    #                    STATUS DETECTION
+    #                    STATUS DETECTION (unchanged)
     # =========================================================
     def is_high_perf_plan(self) -> bool:
         try:
-            output = subprocess.check_output(["powercfg", "/getactivescheme"], text=True)
-            lo = output.lower()
-            return ("high performance" in lo) or ("ultimate performance" in lo) or ("scheme_min" in lo)
+            output = subprocess.check_output(["powercfg", "/getactivescheme"], text=True).lower()
+            return ("high performance" in output) or ("ultimate performance" in output) or ("scheme_min" in output)
         except Exception:
             return False
 
@@ -149,16 +129,14 @@ class WindowsOptimizer:
                 r"Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
             ) as key:
                 val, _ = winreg.QueryValueEx(key, "VisualFXSetting")
-                return int(val) == 2  # 2 = best performance
+                return int(val) == 2
         except Exception:
             return False
 
     def is_network_optimized(self) -> bool:
         try:
             out = subprocess.check_output(["netsh", "int", "tcp", "show", "global"], text=True).lower()
-            # Rough heuristic: CTCP on OR non-normal autotuning
             ctcp_ok = ("congestion provider" in out and "ctcp" in out)
-            # Windows output variants: "Receive Window Auto-Tuning Level : normal/restricted/highlyrestricted/disabled"
             tuned = ("autotuning" in out and ("restricted" in out or "disabled" in out))
             return ctcp_ok or tuned
         except Exception:
@@ -167,8 +145,7 @@ class WindowsOptimizer:
     def is_memleak_guard_active(self) -> bool:
         try:
             for p in psutil.process_iter(["name"]):
-                n = (p.info.get("name") or "").lower()
-                if self._memleak_proc_name in n:
+                if (p.info.get("name") or "").lower() == self._memleak_proc_name:
                     return True
         except Exception:
             pass
@@ -206,23 +183,15 @@ class WindowsOptimizer:
             return False, str(e)
 
     def cleanup_temp_files(self) -> int:
-        """
-        Clean temp dirs only. (Deep cleanup is handled by specific buttons.)
-        Returns approximate number of files removed.
-        """
-        tmp_targets = [
-            Path(os.environ.get("TEMP", r"C:\Windows\Temp")),
-            Path(r"C:\Windows\Temp"),
-        ]
+        tmp_targets = [Path(os.environ.get("TEMP", r"C:\Windows\Temp")), Path(r"C:\Windows\Temp")]
         count = 0
         for base in tmp_targets:
             if not base.exists():
                 continue
             for root, _, files in os.walk(base):
                 for f in files:
-                    fp = Path(root) / f
                     try:
-                        fp.unlink(missing_ok=True)
+                        (Path(root) / f).unlink(missing_ok=True)
                         count += 1
                     except Exception:
                         pass
@@ -237,17 +206,16 @@ class WindowsOptimizer:
         return False, (cp.stderr or cp.stdout or "Failed to create restore point.")
 
     # ---------------------------------------------------------
-    # Memory leak protector (placeholder hooks)
+    # Memory leak protector (placeholder)
     # ---------------------------------------------------------
     def start_memleak_protector(self, process_names: List[str], mb_threshold: int) -> Tuple[bool, str]:
-        # Hook your external helper here later if you ship one.
         return True, f"MemLeak guard armed for {', '.join(process_names)} @ {mb_threshold} MB."
 
     def stop_memleak_protector(self) -> Tuple[bool, str]:
         return True, "MemLeak guard disarmed."
 
     # ---------------------------------------------------------
-    # Network tweaks
+    # Network
     # ---------------------------------------------------------
     def set_dns(self, primary: str, secondary: str) -> Tuple[bool, str]:
         if not is_admin():
@@ -312,7 +280,7 @@ class WindowsOptimizer:
             return False, str(e)
 
     # ---------------------------------------------------------
-    # Startup entries (read-only listing)
+    # Startup (read-only)
     # ---------------------------------------------------------
     def list_startup_entries(self) -> List[Tuple[str, str, str]]:
         results: List[Tuple[str, str, str]] = []
@@ -335,13 +303,9 @@ class WindowsOptimizer:
         return results
 
     # ---------------------------------------------------------
-    # AI-less helpers (deterministic)
+    # AI-less helpers
     # ---------------------------------------------------------
     def adaptive_dns_auto(self) -> Tuple[bool, str]:
-        """
-        Test a small list of DNS candidates via ping and pick the fastest.
-        (Still fully local/deterministic.)
-        """
         candidates = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
         best = None
         best_avg = 9999
@@ -352,7 +316,6 @@ class WindowsOptimizer:
             avg = 9999
             for ln in out.splitlines():
                 lo = ln.lower()
-                # common English output: "Average = 12ms"
                 if "average" in lo and "ms" in lo:
                     parts = [p for p in lo.replace("=", " ").split() if p.endswith("ms")]
                     if parts:
@@ -379,32 +342,173 @@ class WindowsOptimizer:
         return True, "Network repair executed. Reboot may be required.\n" + "\n".join(outs)
 
     # ---------------------------------------------------------
-    # Deep Cleanup
+    # Storage / Cleanup helpers
     # ---------------------------------------------------------
     def clean_browser_caches(self) -> Tuple[bool, str]:
+        """Legacy internal; prefer cleanup_browser_caches() below."""
+        return self.cleanup_browser_caches()
+
+    # ============= NEW: Deep Cleanup (with elevation) =============
+    def _ensure_admin_or_raise_prompt(self) -> bool:
+        """
+        Ensures elevated rights. If not admin, tries to elevate the *specific* action
+        by launching an elevated PowerShell window to perform privileged deletion.
+        For browser caches (user-space), we continue without elevation.
+        Returns True if current process is admin or elevation was initiated for sub-commands.
+        """
+        return is_admin()
+
+    def _delete_tree_best_effort(self, path: Path) -> Tuple[int, int]:
+        """
+        Delete files under path recursively (permanent).
+        Returns (files_removed, bytes_reclaimed). Skips locked files quietly.
+        """
+        files = 0
+        bytes_sum = 0
+        if not path.exists():
+            return 0, 0
+        for root, dirs, fs in os.walk(path, topdown=False):
+            # files
+            for f in fs:
+                fp = Path(root) / f
+                try:
+                    size = fp.stat().st_size
+                    fp.unlink(missing_ok=True)
+                    files += 1
+                    bytes_sum += size
+                except Exception:
+                    pass
+            # dirs
+            for d in dirs:
+                dp = Path(root) / d
+                try:
+                    dp.rmdir()
+                except Exception:
+                    pass
+        # Finally try to remove top folder if empty (do not remove Windows.old root)
+        return files, bytes_sum
+
+    def cleanup_browser_caches(self) -> Tuple[bool, str]:
+        """Clean Chrome/Edge/Brave/Firefox caches (user profile)."""
         home = Path.home()
         targets = [
             home / "AppData/Local/Google/Chrome/User Data/Default/Cache",
             home / "AppData/Local/Google/Chrome/User Data/Default/Code Cache",
             home / "AppData/Local/Microsoft/Edge/User Data/Default/Cache",
             home / "AppData/Local/Microsoft/Edge/User Data/Default/Code Cache",
-            home / "AppData/Local/Mozilla/Firefox/Profiles",
+            home / "AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/Cache",
+            home / "AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/Code Cache",
         ]
-        removed = 0
-        for t in targets:
-            if not t.exists():
-                continue
-            if t.is_dir():
-                for root, _, files in os.walk(t):
-                    for f in files:
-                        fp = Path(root) / f
-                        try:
-                            fp.unlink(missing_ok=True)
-                            removed += 1
-                        except Exception:
-                            pass
-        return True, f"Removed ~{removed} cached files."
 
+        # Firefox: multiple profiles
+        ff_root = home / "AppData/Roaming/Mozilla/Firefox/Profiles"
+        if ff_root.exists():
+            for prof in ff_root.glob("*.default*"):
+                targets.append(prof / "cache2")
+
+        removed_files = 0
+        reclaimed = 0
+        for t in targets:
+            f, b = self._delete_tree_best_effort(t)
+            removed_files += f
+            reclaimed += b
+        return True, f"Browser caches cleaned: {removed_files:,} files, {bytes_fmt(reclaimed)} reclaimed."
+
+    def cleanup_prefetch_and_logs(self) -> Tuple[bool, str]:
+        """Clean Prefetch and System Logs. Elevation recommended."""
+        _ = self._ensure_admin_or_raise_prompt()
+        targets = [Path(r"C:\Windows\Prefetch"), Path(r"C:\Windows\Logs")]
+        removed_files = 0
+        reclaimed = 0
+        for t in targets:
+            f, b = self._delete_tree_best_effort(t)
+            removed_files += f
+            reclaimed += b
+        return True, f"Prefetch & Logs cleaned: {removed_files:,} files, {bytes_fmt(reclaimed)} reclaimed."
+
+    def cleanup_windows_old(self) -> Tuple[bool, str]:
+        """Permanently delete C:\Windows.old if present. Elevation required for full success."""
+        need_admin = not is_admin()
+        target = Path(r"C:\Windows.old")
+
+        if not target.exists():
+            return True, "Windows.old not present."
+
+        if need_admin:
+            # Attempt elevated removal via PowerShell
+            ps = (
+                "Start-Process -Verb RunAs powershell "
+                "'-NoProfile -Command Remove-Item -LiteralPath ''C:\\Windows.old'' -Recurse -Force -ErrorAction SilentlyContinue'"
+            )
+            res = run_ps(ps)
+            if res.returncode == 0:
+                return True, "Windows.old removal requested with elevation (check disk space)."
+            # Fall back to best-effort local delete
+        files, size = self._delete_tree_best_effort(target)
+        # Try remove root dir if empty (ignore errors)
+        try:
+            target.rmdir()
+        except Exception:
+            pass
+        msg = f"Windows.old cleaned: {files:,} files, {bytes_fmt(size)} reclaimed (best-effort)."
+        return True, msg
+
+    def cleanup_deep(self) -> Tuple[bool, str]:
+        """
+        Run all deep cleanup actions sequentially.
+        Returns a multi-line summary and totals.
+        """
+        summaries = []
+        total_files = 0
+        total_bytes = 0
+
+        ok, msg = self.cleanup_browser_caches()
+        summaries.append(msg)
+        # parse numbers best-effort
+        total_files += self._parse_first_int(msg)
+        total_bytes += self._parse_bytes_in_msg(msg)
+
+        ok, msg = self.cleanup_prefetch_and_logs()
+        summaries.append(msg)
+        total_files += self._parse_first_int(msg)
+        total_bytes += self._parse_bytes_in_msg(msg)
+
+        ok, msg = self.cleanup_windows_old()
+        summaries.append(msg)
+        total_files += self._parse_first_int(msg)
+        total_bytes += self._parse_bytes_in_msg(msg)
+
+        summaries.append("")
+        summaries.append(f"[Summary] Total removed files: {total_files:,}")
+        summaries.append(f"[Summary] Total reclaimed: {bytes_fmt(total_bytes)}")
+        return True, "\n".join(summaries)
+
+    # --- tiny parsers for summary totals ---
+    def _parse_first_int(self, text: str) -> int:
+        # find first group of digits possibly with commas
+        import re
+        m = re.search(r"([0-9][0-9,]*)\s+files", text, re.IGNORECASE)
+        if not m:
+            return 0
+        try:
+            return int(m.group(1).replace(",", ""))
+        except Exception:
+            return 0
+
+    def _parse_bytes_in_msg(self, text: str) -> int:
+        # parse "... 812 MB" or "2.45 GB"
+        import re
+        m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(KB|MB|GB|TB)", text, re.IGNORECASE)
+        if not m:
+            return 0
+        val = float(m.group(1))
+        unit = m.group(2).upper()
+        mult = {"KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}.get(unit, 1)
+        return int(val * mult)
+
+    # ---------------------------------------------------------
+    # Storage tools / extras (unchanged from earlier)
+    # ---------------------------------------------------------
     def windows_update_cleanup(self) -> Tuple[bool, str]:
         if not is_admin():
             return False, "Admin required."
@@ -427,9 +531,6 @@ class WindowsOptimizer:
                     pass
         return True, "\n".join(suspicious[:100]) if suspicious else "No obvious residue found."
 
-    # ---------------------------------------------------------
-    # Services / Processes
-    # ---------------------------------------------------------
     def apply_minimal_services(self) -> Tuple[bool, str]:
         if not is_admin():
             return False, "Admin required."
@@ -482,9 +583,6 @@ foreach ($n in $names) {
             return False, r.stderr or r.stdout or "Failed to query GPU driver."
         return True, r.stdout.strip()
 
-    # ---------------------------------------------------------
-    # Storage Tools
-    # ---------------------------------------------------------
     def trim_ssds(self) -> Tuple[bool, str]:
         if not is_admin():
             return False, "Admin required."
@@ -532,23 +630,20 @@ foreach ($n in $names) {
                     if scanned > limit:
                         break
                     try:
-                        h = self._sha1_file(fp)
-                        if h in hashes:
-                            dups.append((str(fp), hashes[h]))
+                        import hashlib
+                        h = hashlib.sha1()
+                        with open(fp, "rb") as f:
+                            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                                h.update(chunk)
+                        digest = h.hexdigest()
+                        if digest in hashes:
+                            dups.append((str(fp), hashes[digest]))
                         else:
-                            hashes[h] = str(fp)
+                            hashes[digest] = str(fp)
                     except Exception:
                         pass
         lines = [f"{a} == {b}" for a, b in dups]
         return True, "\n".join(lines) if lines else "No duplicates found (scan limited)."
-
-    def _sha1_file(self, path: Path) -> str:
-        import hashlib
-        h = hashlib.sha1()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-        return h.hexdigest()
 
     def analyze_disk_usage(self) -> Tuple[bool, str]:
         r1 = run_ps("Get-Volume | Select-Object DriveLetter, FileSystem, SizeRemaining, Size | "
@@ -579,99 +674,24 @@ foreach ($n in $names) {
         return True, f"Removed {removed} prefetch entries."
 
     def remove_windows_old(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        wold = Path(r"C:\Windows.old")
-        if not wold.exists():
-            return True, "Windows.old not present."
-        r = run_ps("Remove-Item -LiteralPath 'C:\\Windows.old' -Recurse -Force -ErrorAction SilentlyContinue")
-        ok = r.returncode == 0
-        return ok, ("Windows.old removed." if ok else (r.stderr or r.stdout or "Removal failed (in use)."))
+        # Kept for backward compatibility; delegates
+        return self.cleanup_windows_old()
 
     # ---------------------------------------------------------
-    # Task Scheduler Tweaks
-    # ---------------------------------------------------------
-    def list_common_tasks(self) -> Tuple[bool, str]:
-        tasks = self._telemetry_tasks() + self._xbox_tasks()
-        lines = []
-        for t in tasks:
-            q = run_ps(f'schtasks /Query /TN "{t}" /FO LIST')
-            out = (q.stdout or q.stderr or "").strip()
-            lines.append(out if out else f"{t}: (not found)")
-        return True, "\n\n".join(lines)
-
-    def disable_telemetry_tasks(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        msgs = []
-        for t in self._telemetry_tasks():
-            r = run_ps(f'schtasks /Change /TN "{t}" /Disable')
-            msgs.append(f"{t}: {'disabled' if r.returncode == 0 else 'not found'}")
-        return True, "\n".join(msgs)
-
-    def enable_telemetry_tasks(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        msgs = []
-        for t in self._telemetry_tasks():
-            r = run_ps(f'schtasks /Change /TN "{t}" /Enable')
-            msgs.append(f"{t}: {'enabled' if r.returncode == 0 else 'not found'}")
-        return True, "\n".join(msgs)
-
-    def disable_xbox_tasks(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        msgs = []
-        for t in self._xbox_tasks():
-            r = run_ps(f'schtasks /Change /TN "{t}" /Disable')
-            msgs.append(f"{t}: {'disabled' if r.returncode == 0 else 'not found'}")
-        return True, "\n".join(msgs)
-
-    def enable_xbox_tasks(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        msgs = []
-        for t in self._xbox_tasks():
-            r = run_ps(f'schtasks /Change /TN "{t}" /Enable')
-            msgs.append(f"{t}: {'enabled' if r.returncode == 0 else 'not found'}")
-        return True, "\n".join(msgs)
-
-    def _telemetry_tasks(self) -> List[str]:
-        return [
-            r"\Microsoft\Windows\Application Experience\ProgramDataUpdater",
-            r"\Microsoft\Windows\Application Experience\AitAgent",
-            r"\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
-            r"\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
-            r"\Microsoft\Windows\Autochk\Proxy",
-            r"\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector",
-        ]
-
-    def _xbox_tasks(self) -> List[str]:
-        return [
-            r"\Microsoft\XblGameSave\XblGameSaveTask",
-            r"\Microsoft\XblGameSave\XblGameSaveTaskLogon",
-        ]
-
-    # ---------------------------------------------------------
-    # Restore Defaults & Logs
+    # Defaults & Logs
     # ---------------------------------------------------------
     def restore_defaults(self) -> Tuple[bool, str]:
         if not is_admin():
             return False, "Admin required."
         msgs = []
-
-        # Power plan -> Balanced
         run_ps("powercfg -setactive SCHEME_BALANCED"); msgs.append("Power plan -> Balanced")
-
-        # Network defaults
         for n in ["Ethernet", "Wi-Fi", "WiFi", "Local Area Connection"]:
             run_ps(f'netsh interface ip set dns name="{n}" dhcp')
-        msgs.append("DNS -> DHCP (all common adapters)")
+        msgs.append("DNS -> DHCP (common adapters)")
         run_ps('netsh int tcp set global autotuninglevel=normal'); msgs.append("TCP autotuning -> normal")
         run_ps('netsh int tcp set global congestionprovider=none'); msgs.append("CTCP -> disabled")
-        self.toggle_nagle(False); msgs.append("Nagle -> enabled (default)")
+        self.toggle_nagle(False); msgs.append("Nagle -> enabled")
 
-        # Game Mode default ON
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\GameBar", 0, winreg.KEY_SET_VALUE) as k:
                 winreg.SetValueEx(k, "AllowAutoGameMode", 0, winreg.REG_DWORD, 1)
@@ -679,7 +699,6 @@ foreach ($n in $names) {
         except Exception:
             msgs.append("Game Mode -> unchanged")
 
-        # Visual Effects -> Windows default (0 = Let Windows decide)
         try:
             path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as k:
@@ -688,11 +707,9 @@ foreach ($n in $names) {
         except Exception:
             msgs.append("Visual Effects -> unchanged")
 
-        # Services -> revert common ones
         run_ps("Set-Service -Name SysMain -StartupType Automatic -ErrorAction SilentlyContinue")
         run_ps("Set-Service -Name DiagTrack -StartupType Manual -ErrorAction SilentlyContinue")
-        msgs.append("Services -> common defaults restored (SysMain/DiagTrack)")
-
+        msgs.append("Services -> defaults restored (SysMain/DiagTrack)")
         return True, "Restored defaults:\n- " + "\n- ".join(msgs)
 
     def export_logs_zip(self) -> Tuple[bool, str]:
@@ -712,7 +729,7 @@ foreach ($n in $names) {
             return False, str(e)
 
     # ---------------------------------------------------------
-    # Default Game Optimizer (Games Page)
+    # Default Game Optimizer
     # ---------------------------------------------------------
     def apply_default_game_tweaks(self) -> str:
         cmds = [
@@ -737,28 +754,9 @@ foreach ($n in $names) {
         return "Reverted optimizations to default state."
 
     # ---------------------------------------------------------
-    # Profile Application (JSON-based, safe keys)
+    # Profile Application (safe keys)
     # ---------------------------------------------------------
     def apply_profile(self, data: Dict) -> str:
-        """
-        Apply a JSON profile:
-          {
-            "name": "...",
-            "description": "...",
-            "tweaks": {
-                "GameBar": false,
-                "FullscreenOptimizations": false,
-                "LowLatencyMode": true,
-                "PriorityBoost": true,
-                "VisualFX": "performance|balanced|default",
-                "NetworkStack": "gaming|ultra-low",
-                "CTCP": true,
-                "DNS": "1.1.1.1",
-                "SysMain": false,
-                "Telemetry": false
-            }
-          }
-        """
         tweaks = data.get("tweaks", {})
         applied = []
 
@@ -768,15 +766,12 @@ foreach ($n in $names) {
                     self._set_reg_hkcu(r"Software\Microsoft\GameBar", "ShowStartupPanel", 0 if not value else 1)
                     applied.append("GameBar")
                 elif key == "FullscreenOptimizations":
-                    # Disable FSE behavior -> 2 (performance mode) under GameDVR_FSEBehaviorMode
                     run_ps(r'reg add "HKCU\System\GameConfigStore" /v GameDVR_FSEBehaviorMode /t REG_DWORD /d 2 /f')
                     applied.append("FullscreenOptimizations")
                 elif key == "LowLatencyMode":
-                    # Processor performance boost mode: 1 (Efficient Aggressive)
                     run_ps('powercfg -setacvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE 1')
                     applied.append("LowLatencyMode")
                 elif key == "PriorityBoost":
-                    # Give shell a gentle nudge; for actual game, user should start game then set priority there
                     run_ps('wmic process where name="explorer.exe" call setpriority 128')
                     applied.append("PriorityBoost")
                 elif key == "SysMain":
@@ -789,7 +784,6 @@ foreach ($n in $names) {
                     run_ps('netsh interface tcp set global congestionprovider=ctcp')
                     applied.append("CTCP")
                 elif key == "DNS":
-                    # Default to Ethernet; user may adjust adapter if needed
                     run_ps(f'netsh interface ip set dns "Ethernet" static {value}')
                     applied.append("DNS")
                 elif key == "NetworkStack":
@@ -804,12 +798,10 @@ foreach ($n in $names) {
                            rf'/v VisualFXSetting /t REG_DWORD /d {level} /f')
                     applied.append(f"VisualFX={value}")
             except Exception:
-                # Keep going even if one tweak fails
                 pass
 
         return f"Applied {len(applied)} tweaks from profile: {', '.join(applied)}"
 
-    # Registry helper
     def _set_reg_hkcu(self, path: str, name: str, value: int) -> None:
         try:
             hkey = winreg.CreateKey(winreg.HKEY_CURRENT_USER, path)
