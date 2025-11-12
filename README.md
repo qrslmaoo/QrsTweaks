@@ -1,6 +1,6 @@
 # QrsTweaks
 
-![QrsTweaks Logo](https://github.com/user-attachments/assets/PLACEHOLDER_LOGO_PNG)  
+![QrsTweaks Logo](https://github.com/qrslmaoo/QrsTweaks/blob/main/screenshots/logo.png?raw=true)  
 **A comprehensive local Windows optimization suite**  
 Built with **Python** and **PySide6** – 100% offline, no APIs, no telemetry.
 
