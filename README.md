@@ -1,7 +1,7 @@
 # QrsTweaks
 
 ![QrsTweaks Logo](https://github.com/qrslmaoo/QrsTweaks/blob/main/screenshots/logo.png?raw=true)  
-**A comprehensive local Windows optimization suite**  
+**A comprehensive local Windows optimization program**  
 Built with **Python** and **PySide6** – 100% offline, no APIs, no telemetry.
 
 [![GitHub stars](https://img.shields.io/github/stars/qrslmaoo/QrsTweaks?style=flat-square)](https://github.com/qrslmaoo/QrsTweaks/stargazers)
@@ -121,7 +121,7 @@ Clear, descriptive commit messages
 
 ##  License
 This project is licensed under the GNU General Public License v3.0 – see the LICENSE file for details.
-textQrsTweaks - A local Windows optimization suite
+QrsTweaks - A local Windows optimization program
 Copyright (C) 2025 qrslmaoo
 
 This program is free software: you can redistribute it and/or modify
