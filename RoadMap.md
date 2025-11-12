@@ -1,11 +1,11 @@
-# 🧭 QrsTweaks Roadmap
+#  QrsTweaks Roadmap
 
 Welcome to the development roadmap for **QrsTweaks**, the all-in-one Windows optimization suite built in Python + PySide6.  
 This document outlines every major planned feature, milestone, and enhancement — from technical infrastructure to user experience.
 
 ---
 
-## 🚀 Phase 1 — Foundation (✅ Completed)
+##  Phase 1 — Foundation ( Completed)
 **Goal:** Establish a stable, safe, and transparent optimization core.
 
 - [x] Frameless, translucent PySide6 GUI (Suite layout)
@@ -19,7 +19,7 @@ This document outlines every major planned feature, milestone, and enhancement �
 
 ---
 
-## ⚙️ Phase 2 — Power-User Expansion *(in progress)*
+##  Phase 2 — Power-User Expansion *(in progress)*
 **Goal:** Add advanced but still safe performance enhancements.
 
 - [ ] Deep Cleanup: browser caches, prefetch, Windows.old
@@ -32,7 +32,7 @@ This document outlines every major planned feature, milestone, and enhancement �
 
 ---
 
-## 🧩 Phase 3 — Profiles & Automation
+##  Phase 3 — Profiles & Automation
 **Goal:** Empower users to customize and share their own performance styles.
 
 - [ ] **Profile System v2**
@@ -51,7 +51,7 @@ This document outlines every major planned feature, milestone, and enhancement �
 
 ---
 
-## 🧠 Phase 4 — Insight & Visualization
+##  Phase 4 — Insight & Visualization
 **Goal:** Give users clear, visual feedback on their system’s performance.
 
 - [ ] **Performance Score**
@@ -68,7 +68,7 @@ This document outlines every major planned feature, milestone, and enhancement �
 
 ---
 
-## 🧱 Phase 5 — Quality, Community & Distribution
+##  Phase 5 — Quality, Community & Distribution
 **Goal:** Make QrsTweaks the top-rated open-source optimizer on GitHub.
 
 - [ ] Code cleanup & modular structure (`src/qrs/modules/*`)
@@ -85,13 +85,13 @@ This document outlines every major planned feature, milestone, and enhancement �
 
 ---
 
-## 🏁 Vision
+##  Vision
 QrsTweaks aims to be the **cleanest, most transparent, and most effective** Windows optimization tool on GitHub —  
 no telemetry, no ads, no shady scripts. 100 % local execution, fully open-source, and user-controllable.
 
 ---
 
-### 💬 Suggestions?
+###  Suggestions?
 Open a [GitHub Issue](https://github.com/qrslmaoo/QrsTweaks/issues/new/choose) with the label **feature-request**,  
 or discuss in the community thread once the Discord launches.
 
