@@ -1,0 +1,64 @@
+name: " Feature Request"
+description: "Suggest a new feature, tweak, or enhancement for QrsTweaks"
+labels: ["feature-request"]
+title: "[Feature] <short title>"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve **QrsTweaks**!  
+        Please describe your idea clearly and concisely below.
+
+  - type: input
+    id: summary
+    attributes:
+      label:  Feature Summary
+      description: What would you like QrsTweaks to do?
+      placeholder: "Add a Power Plan scheduler, FPS tweak, custom theme, etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label:  Motivation
+      description: Why do you want this feature? What problem would it solve?
+      placeholder: "It would help users automatically switch to Gaming Mode after startup..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label:  Category
+      description: Which part of QrsTweaks does this apply to?
+      multiple: false
+      options:
+        - UI / Appearance
+        - Windows Optimizer
+        - Game Optimizer
+        - Passwords / Security
+        - Profiles / Presets
+        - System Scan & Cleanup
+        - Other
+
+  - type: textarea
+    id: details
+    attributes:
+      label:  Proposed Implementation
+      description: How could this be implemented (at a high level)?
+      placeholder: "Add a new button under Network Optimizer that runs 'netsh int ip reset' and 'ipconfig /flushdns'..."
+      render: shell
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: ✅ Confirmation
+      description: Please verify before submitting.
+      options:
+        - label: I’ve checked existing issues to avoid duplicates.
+          required: true
+        - label: This feature doesn’t involve AI, telemetry, or external monitoring.
+          required: true
+        - label: I’m okay with this being open-source and GPL-compatible.
+          required: true
