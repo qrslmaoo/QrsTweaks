@@ -1,9 +1,7 @@
 import os
 import sys
-import shutil
-import time
 import json
-import hashlib
+import zipfile
 import subprocess
 from pathlib import Path
 
@@ -12,7 +10,6 @@ import winreg
 
 
 def is_admin() -> bool:
-    """Return True if this process is elevated."""
     try:
         import ctypes
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
@@ -21,7 +18,6 @@ def is_admin() -> bool:
 
 
 def run_ps(script: str) -> subprocess.CompletedProcess:
-    """Run a PowerShell command safely, returning CompletedProcess."""
     return subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
         text=True,
@@ -31,10 +27,11 @@ def run_ps(script: str) -> subprocess.CompletedProcess:
 
 
 class WindowsOptimizer:
-    """Handles Windows optimization tasks and status detection + actions."""
-
     def __init__(self):
         self._memleak_proc_name = "qrs_memguard.exe"
+        self.root = Path(__file__).resolve().parents[3]  # repo root
+        self.logs_dir = self.root / "Logs"
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
 
     # ---------------------------------------------------------
     # Status Detection
@@ -69,7 +66,6 @@ class WindowsOptimizer:
     def is_network_optimized(self) -> bool:
         try:
             out = subprocess.check_output(["netsh", "int", "tcp", "show", "global"], text=True).lower()
-            # Loose heuristic: CTCP on or autotuning != normal -> considered optimized
             return ("ctcp" in out and "disabled" not in out) or ("autotuning level" in out and "normal" not in out)
         except Exception:
             return False
@@ -77,15 +73,14 @@ class WindowsOptimizer:
     def is_memleak_guard_active(self) -> bool:
         try:
             for p in psutil.process_iter(["name"]):
-                name = (p.info.get("name") or "").lower()
-                if self._memleak_proc_name in name:
+                n = (p.info.get("name") or "").lower()
+                if self._memleak_proc_name in n:
                     return True
         except Exception:
             pass
         return False
 
     def is_services_optimized(self) -> bool:
-        """Heuristic: SysMain disabled AND DiagTrack disabled."""
         try:
             out = run_ps(
                 "(Get-Service -Name 'SysMain','DiagTrack' -ErrorAction SilentlyContinue | "
@@ -104,7 +99,7 @@ class WindowsOptimizer:
             return False
 
     # ---------------------------------------------------------
-    # Existing basics
+    # Basics already present
     # ---------------------------------------------------------
     def quick_scan(self) -> str:
         try:
@@ -118,7 +113,6 @@ class WindowsOptimizer:
         if not is_admin():
             return False, "Admin required for power plan."
         try:
-            # Activate High performance builtin (SCHEME_MIN)
             subprocess.run(["powercfg", "-setactive", "SCHEME_MIN"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             return True, "High Performance plan activated."
@@ -126,9 +120,14 @@ class WindowsOptimizer:
             return False, str(e)
 
     def cleanup_temp_files(self) -> int:
-        temp = Path(os.environ.get("TEMP", r"C:\Windows\Temp"))
+        tmp_dirs = [
+            Path(os.environ.get("TEMP", r"C:\Windows\Temp")),
+            Path(r"C:\Windows\Temp")
+        ]
         count = 0
-        try:
+        for temp in tmp_dirs:
+            if not temp.exists():
+                continue
             for root, _, files in os.walk(temp):
                 for f in files:
                     fp = Path(root) / f
@@ -137,8 +136,6 @@ class WindowsOptimizer:
                         count += 1
                     except Exception:
                         pass
-        except Exception:
-            pass
         return count
 
     def create_restore_point(self, name):
@@ -150,22 +147,20 @@ class WindowsOptimizer:
         return False, (cp.stderr or cp.stdout or "Failed to create restore point.")
 
     # ---------------------------------------------------------
-    # Memory leak protector (placeholder hook)
+    # Memory leak protector (placeholder)
     # ---------------------------------------------------------
     def start_memleak_protector(self, process_names, mb_threshold):
-        # Placeholder: future background monitor; currently just acknowledges.
         return True, f"MemLeak guard armed for {', '.join(process_names)} @ {mb_threshold} MB."
 
     def stop_memleak_protector(self):
         return True, "MemLeak guard disarmed."
 
     # ---------------------------------------------------------
-    # Network – concrete tweaks
+    # Network tweaks
     # ---------------------------------------------------------
     def set_dns(self, primary, secondary):
         if not is_admin():
             return False, "Admin required to set DNS."
-        # Try common interface names
         names = ["Ethernet", "Wi-Fi", "WiFi", "Local Area Connection"]
         errors = []
         for n in names:
@@ -196,17 +191,14 @@ class WindowsOptimizer:
     def toggle_nagle(self, disable=True):
         if not is_admin():
             return False, "Admin required."
-        # Safer approach: set for current active interface GUIDs
         try:
-            # Find all NIC interface GUID subkeys and set TcpAckFrequency/TcpNoDelay = 1
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                                 r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces") as root:
                 i = 0
                 changed = 0
                 while True:
                     try:
-                        subname = winreg.EnumKey(root, i)
-                        i += 1
+                        subname = winreg.EnumKey(root, i); i += 1
                         with winreg.OpenKey(root, subname, 0, winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE) as sub:
                             val = 1 if disable else 0
                             try:
@@ -228,41 +220,60 @@ class WindowsOptimizer:
         except Exception as e:
             return False, str(e)
 
-    # --- AI-ish helpers ---
-    def adaptive_dns_auto(self):
-        """Ping well-known resolvers and choose the fastest."""
-        candidates = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
+    # ---------------------------------------------------------
+    # Startup entries (read-only listing)
+    # ---------------------------------------------------------
+    def list_startup_entries(self):
         results = []
+        keys = [
+            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"),
+            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Run"),
+        ]
+        for root, path in keys:
+            try:
+                with winreg.OpenKey(root, path) as k:
+                    i = 0
+                    while True:
+                        try:
+                            name, val, _ = winreg.EnumValue(k, i); i += 1
+                            results.append((path, name, val))
+                        except OSError:
+                            break
+            except FileNotFoundError:
+                pass
+        return results
+
+    # ---------------------------------------------------------
+    # AI-less helpers
+    # ---------------------------------------------------------
+    def adaptive_dns_auto(self):
+        # simplified: test candidates and set the fastest
+        candidates = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
+        best = None
+        best_avg = 9999
         for ip in candidates:
             ok, out = self.latency_ping(ip, 3)
             if not ok:
                 continue
-            # Simple parse: average time = Xms
             avg = 9999
             for ln in out.splitlines():
                 ln = ln.lower()
                 if "average" in ln:
-                    # windows locale: Average = Xms
                     nums = [int(s.replace("ms", "")) for s in ln.split() if s.endswith("ms")]
                     if nums:
                         avg = nums[-1]
-            results.append((avg, ip))
-        if not results:
-            return False, "No ping results."
-        results.sort()
-        fastest = results[0][1]
-        # Set primary to fastest, secondary fallback by simple order
-        order = [fastest] + [x for x in candidates if x != fastest]
+            if avg < best_avg:
+                best_avg = avg
+                best = ip
+        if not best:
+            return False, "No usable DNS ping results."
+        order = [best] + [x for x in candidates if x != best]
         return self.set_dns(order[0], order[1])
 
     def auto_network_repair(self):
         if not is_admin():
             return False, "Admin required."
-        cmds = [
-            "netsh int ip reset",
-            "netsh winsock reset",
-            "ipconfig /flushdns"
-        ]
+        cmds = ["netsh int ip reset", "netsh winsock reset", "ipconfig /flushdns"]
         outs = []
         for c in cmds:
             r = run_ps(c)
@@ -273,7 +284,6 @@ class WindowsOptimizer:
     # Deep Cleanup
     # ---------------------------------------------------------
     def clean_browser_caches(self):
-        """Delete Chrome/Edge/Firefox cache safely."""
         home = Path.home()
         targets = [
             home / "AppData/Local/Google/Chrome/User Data/Default/Cache",
@@ -284,64 +294,40 @@ class WindowsOptimizer:
         ]
         removed = 0
         for t in targets:
-            if not t.exists():
-                continue
+            if not t.exists(): continue
             if t.is_dir():
                 for root, _, files in os.walk(t):
                     for f in files:
                         fp = Path(root) / f
                         try:
-                            fp.unlink(missing_ok=True)
-                            removed += 1
-                        except Exception:
-                            pass
+                            fp.unlink(missing_ok=True); removed += 1
+                        except Exception: pass
         return True, f"Removed ~{removed} cached files."
 
     def windows_update_cleanup(self):
-        if not is_admin():
-            return False, "Admin required."
-        # DISM cleanup + Delivery Optimization cache purge
+        if not is_admin(): return False, "Admin required."
         dism = run_ps("DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase")
-        do_folder = Path(r"C:\Windows\SoftwareDistribution\DeliveryOptimization")
-        try:
-            if do_folder.exists():
-                for p in do_folder.rglob("*"):
-                    try:
-                        if p.is_file():
-                            p.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
         ok = dism.returncode == 0
         msg = (dism.stdout or dism.stderr or "").strip()
         return ok, ("Windows Update cleanup finished." if ok else msg)
 
     def find_app_residue(self):
-        roots = [
-            Path.home() / "AppData/Local",
-            Path.home() / "AppData/Roaming",
-            Path("C:/ProgramData")
-        ]
+        roots = [Path.home() / "AppData/Local", Path.home() / "AppData/Roaming", Path(r"C:\ProgramData")]
         suspicious = []
         for r in roots:
-            if not r.exists():
-                continue
+            if not r.exists(): continue
             for d in r.iterdir():
                 try:
                     if d.is_dir() and (d.name.lower().startswith("uninstall") or "temp" in d.name.lower()):
                         suspicious.append(str(d))
-                except Exception:
-                    pass
+                except Exception: pass
         return True, "\n".join(suspicious[:100]) if suspicious else "No obvious residue found."
 
     # ---------------------------------------------------------
     # Services / Processes
     # ---------------------------------------------------------
     def apply_minimal_services(self):
-        if not is_admin():
-            return False, "Admin required."
-        # Safer baseline: disable telemetry & SysMain, keep Search running by default.
+        if not is_admin(): return False, "Admin required."
         script = r"""
 $names = @('DiagTrack','SysMain')
 foreach ($n in $names) {
@@ -353,25 +339,19 @@ foreach ($n in $names) {
 }
 """
         r = run_ps(script)
-        if r.returncode == 0:
-            return True, "Disabled DiagTrack & SysMain."
-        return False, r.stderr or r.stdout
+        return (r.returncode == 0), (r.stderr or r.stdout or "Applied minimal services.")
 
     def throttle_background_cpu(self):
-        """Lower priority of background processes (simple heuristic)."""
         lowered = 0
         allow = {"explorer.exe", "dwm.exe", "csrss.exe", "smss.exe", "system", "registry"}
         try:
-            for p in psutil.process_iter(["name", "pid", "cpu_percent"]):
+            for p in psutil.process_iter(["name", "pid"]):
                 n = (p.info.get("name") or "").lower()
-                if not n or n in allow:
-                    continue
+                if not n or n in allow: continue
                 try:
-                    proc = psutil.Process(p.info["pid"])
-                    proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+                    psutil.Process(p.info["pid"]).nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
                     lowered += 1
-                except Exception:
-                    pass
+                except Exception: pass
             return True, f"Lowered priority on ~{lowered} processes."
         except Exception as e:
             return False, str(e)
@@ -383,11 +363,11 @@ foreach ($n in $names) {
                 procs.append(
                     (p.info["cpu_percent"], p.info["memory_info"].rss // (1024 * 1024), p.info["pid"], p.info["name"])
                 )
-            except Exception:
-                pass
+            except Exception: pass
         procs.sort(reverse=True)
         lines = [f"CPU {cpu:.1f}% | RAM {ram} MB | PID {pid} | {name}" for cpu, ram, pid, name in procs[:20]]
         return True, "\n".join(lines) if lines else "No processes."
+
     def driver_version_integrity(self):
         r = run_ps("(Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion | ConvertTo-Json)")
         if r.returncode != 0 or not r.stdout.strip():
@@ -395,19 +375,16 @@ foreach ($n in $names) {
         return True, r.stdout.strip()
 
     # ---------------------------------------------------------
-    # Storage
+    # Storage Tools
     # ---------------------------------------------------------
     def trim_ssds(self):
-        if not is_admin():
-            return False, "Admin required."
+        if not is_admin(): return False, "Admin required."
         r = run_ps("defrag /C /L")
         return (r.returncode == 0), (r.stdout or r.stderr)
 
     def defrag_hdds_safe(self):
-        if not is_admin():
-            return False, "Admin required."
-        # /U /V verbose; /H normal priority; /M can run on multiple volumes
-        r = run_ps("defrag /E C: /U /V")  # avoid C: if it's SSD; /E excludes, but here we just demonstrate
+        if not is_admin(): return False, "Admin required."
+        r = run_ps("defrag /E C: /U /V")
         return (r.returncode == 0), (r.stdout or r.stderr)
 
     def find_large_files(self, roots=None, min_mb=500, limit=50):
@@ -417,14 +394,12 @@ foreach ($n in $names) {
         found = []
         for r in roots:
             p = Path(r)
-            if not p.exists():
-                continue
+            if not p.exists(): continue
             for fp in p.rglob("*"):
                 try:
                     if fp.is_file() and fp.stat().st_size >= min_bytes:
                         found.append((fp.stat().st_size, str(fp)))
-                except Exception:
-                    pass
+                except Exception: pass
         found.sort(reverse=True)
         lines = [f"{size/1024/1024:.0f} MB  {path}" for size, path in found[:limit]]
         return True, "\n".join(lines) if lines else "No large files found."
@@ -432,72 +407,177 @@ foreach ($n in $names) {
     def duplicate_finder(self, roots=None, limit=2000):
         if roots is None:
             roots = [str(Path.home() / "Downloads"), str(Path.home() / "Documents")]
-        hashes = {}
-        dups = []
+        hashes, dups = {}, []
         scanned = 0
         for r in roots:
             p = Path(r)
-            if not p.exists():
-                continue
+            if not p.exists(): continue
             for fp in p.rglob("*"):
                 if fp.is_file():
                     scanned += 1
-                    if scanned > limit:
-                        break
+                    if scanned > limit: break
                     try:
-                        h = hashlib.sha1(fp.read_bytes()).hexdigest()
-                        if h in hashes:
-                            dups.append((str(fp), hashes[h]))
-                        else:
-                            hashes[h] = str(fp)
-                    except Exception:
-                        pass
+                        h = self._sha1_file(fp)
+                        if h in hashes: dups.append((str(fp), hashes[h]))
+                        else: hashes[h] = str(fp)
+                    except Exception: pass
         lines = [f"{a} == {b}" for a, b in dups]
-        return True, "\n".join(lines) if lines else "No duplicates found (scanned limit reached)."
+        return True, "\n".join(lines) if lines else "No duplicates found (scan limited)."
+
+    def _sha1_file(self, path: Path) -> str:
+        import hashlib
+        h = hashlib.sha1()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    # Extra storage tools
+    def analyze_disk_usage(self):
+        r1 = run_ps("Get-Volume | Select-Object DriveLetter, FileSystem, SizeRemaining, Size | Format-Table -AutoSize | Out-String")
+        r2 = run_ps("Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free | Format-Table -AutoSize | Out-String")
+        out = (r1.stdout or r1.stderr or "") + "\n" + (r2.stdout or r2.stderr or "")
+        return True, out.strip()
+
+    def compact_winsxs(self):
+        if not is_admin(): return False, "Admin required."
+        r = run_ps("DISM /Online /Cleanup-Image /StartComponentCleanup")
+        return (r.returncode == 0), (r.stdout or r.stderr or "WinSxS compact requested.")
+
+    def purge_prefetch_cache(self):
+        if not is_admin(): return False, "Admin required."
+        pf = Path(r"C:\Windows\Prefetch")
+        removed = 0
+        if pf.exists():
+            for f in pf.glob("*.pf"):
+                try:
+                    f.unlink(missing_ok=True); removed += 1
+                except Exception: pass
+        return True, f"Removed {removed} prefetch entries."
+
+    def remove_windows_old(self):
+        if not is_admin(): return False, "Admin required."
+        wold = Path(r"C:\Windows.old")
+        if not wold.exists():
+            return True, "Windows.old not present."
+        r = run_ps("Remove-Item -LiteralPath 'C:\\Windows.old' -Recurse -Force -ErrorAction SilentlyContinue")
+        ok = r.returncode == 0
+        return ok, ("Windows.old removed." if ok else (r.stderr or r.stdout or "Removal failed (in use)."))
 
     # ---------------------------------------------------------
-    # Security & Stability
+    # Task Scheduler Tweaks (no monitoring, no background)
     # ---------------------------------------------------------
-    def create_snapshot(self, name="QrsTweaks Snapshot"):
-        return self.create_restore_point(name)
+    def list_common_tasks(self):
+        tasks = self._telemetry_tasks() + self._xbox_tasks()
+        lines = []
+        for t in tasks:
+            q = run_ps(f'schtasks /Query /TN "{t}" /FO LIST')
+            out = (q.stdout or q.stderr or "").strip()
+            lines.append(out if out else f"{t}: (not found)")
+        return True, "\n\n".join(lines)
 
-    def flag_unsigned_processes(self):
-        # Uses PowerShell Authenticode signature
-        script = r"""
-Get-Process | ForEach-Object {
-    try {
-        $p = $_
-        $path = $p.Path
-        if ($null -ne $path -and (Test-Path $path)) {
-            $sig = Get-AuthenticodeSignature -FilePath $path
-            [PSCustomObject]@{ Name=$p.Name; PID=$p.Id; Status=$sig.Status; Path=$path }
-        }
-    } catch {}
-} | Where-Object { $_.Status -ne 'Valid' } | ConvertTo-Json
-"""
-        r = run_ps(script)
-        if r.returncode != 0:
-            return False, r.stderr or r.stdout
-        data = r.stdout.strip()
-        if not data:
-            return True, "No unsigned processes reported."
+    def disable_telemetry_tasks(self):
+        if not is_admin(): return False, "Admin required."
+        msgs = []
+        for t in self._telemetry_tasks():
+            r = run_ps(f'schtasks /Change /TN "{t}" /Disable')
+            msgs.append(f"{t}: {'disabled' if r.returncode == 0 else 'not found'}")
+        return True, "\n".join(msgs)
+
+    def enable_telemetry_tasks(self):
+        if not is_admin(): return False, "Admin required."
+        msgs = []
+        for t in self._telemetry_tasks():
+            r = run_ps(f'schtasks /Change /TN "{t}" /Enable')
+            msgs.append(f"{t}: {'enabled' if r.returncode == 0 else 'not found'}")
+        return True, "\n".join(msgs)
+
+    def disable_xbox_tasks(self):
+        if not is_admin(): return False, "Admin required."
+        msgs = []
+        for t in self._xbox_tasks():
+            r = run_ps(f'schtasks /Change /TN "{t}" /Disable')
+            msgs.append(f"{t}: {'disabled' if r.returncode == 0 else 'not found'}")
+        return True, "\n".join(msgs)
+
+    def enable_xbox_tasks(self):
+        if not is_admin(): return False, "Admin required."
+        msgs = []
+        for t in self._xbox_tasks():
+            r = run_ps(f'schtasks /Change /TN "{t}" /Enable')
+            msgs.append(f"{t}: {'enabled' if r.returncode == 0 else 'not found'}")
+        return True, "\n".join(msgs)
+
+    def _telemetry_tasks(self):
+        return [
+            r"\Microsoft\Windows\Application Experience\ProgramDataUpdater",
+            r"\Microsoft\Windows\Application Experience\AitAgent",
+            r"\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
+            r"\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
+            r"\Microsoft\Windows\Autochk\Proxy",
+            r"\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector",
+        ]
+
+    def _xbox_tasks(self):
+        return [
+            r"\Microsoft\XblGameSave\XblGameSaveTask",
+            r"\Microsoft\XblGameSave\XblGameSaveTaskLogon",
+        ]
+
+    # ---------------------------------------------------------
+    # Restore Defaults & Logs
+    # ---------------------------------------------------------
+    def restore_defaults(self):
+        if not is_admin(): return False, "Admin required."
+        msgs = []
+
+        # Power plan -> Balanced
+        run_ps("powercfg -setactive SCHEME_BALANCED"); msgs.append("Power plan -> Balanced")
+
+        # Network defaults
+        for n in ["Ethernet", "Wi-Fi", "WiFi", "Local Area Connection"]:
+            run_ps(f'netsh interface ip set dns name="{n}" dhcp')
+        msgs.append("DNS -> DHCP (all common adapters)")
+        run_ps('netsh int tcp set global autotuninglevel=normal'); msgs.append("TCP autotuning -> normal")
+        run_ps('netsh int tcp set global congestionprovider=none'); msgs.append("CTCP -> disabled")
+        self.toggle_nagle(False); msgs.append("Nagle -> enabled (default)")
+
+        # Game Mode default ON
         try:
-            items = json.loads(data)
-            if isinstance(items, dict):
-                items = [items]
-            lines = [f"{x.get('Name')} (PID {x.get('PID')}) — {x.get('Status')} — {x.get('Path')}" for x in items]
-            return True, "\n".join(lines) if lines else "No unsigned processes."
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\GameBar", 0, winreg.KEY_SET_VALUE) as k:
+                winreg.SetValueEx(k, "AllowAutoGameMode", 0, winreg.REG_DWORD, 1)
+            msgs.append("Game Mode -> ON")
         except Exception:
-            return True, data
+            msgs.append("Game Mode -> unchanged")
 
-    def winsock_dns_reset(self):
-        if not is_admin():
-            return False, "Admin required."
-        return self.auto_network_repair()
+        # Visual Effects -> Windows default (let system decide = 0)
+        try:
+            path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as k:
+                winreg.SetValueEx(k, "VisualFXSetting", 0, winreg.REG_DWORD, 0)
+            msgs.append("Visual Effects -> default")
+        except Exception:
+            msgs.append("Visual Effects -> unchanged")
 
-    def sfc_scannow(self):
-        if not is_admin():
-            return False, "Admin required."
-        # Fire-and-forget; SFC can take a long time.
-        p = subprocess.Popen(["sfc", "/scannow"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        return True, "SFC /scannow started in background; this may take a while."
+        # Services -> revert common ones
+        run_ps("Set-Service -Name SysMain -StartupType Automatic -ErrorAction SilentlyContinue")
+        run_ps("Set-Service -Name DiagTrack -StartupType Manual -ErrorAction SilentlyContinue")
+        msgs.append("Services -> common defaults restored (SysMain/DiagTrack)")
+
+        return True, "Restored defaults:\n- " + "\n- ".join(msgs)
+
+    def export_logs_zip(self):
+        export_dir = self.root / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        out_zip = export_dir / "QrsTweaks_Logs.zip"
+        with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as z:
+            for p in self.logs_dir.glob("*.txt"):
+                z.write(p, arcname=p.name)
+        return True, f"Logs exported: {out_zip}"
+
+    def open_logs_folder(self):
+        try:
+            os.startfile(self.logs_dir)  # Windows-only
+            return True, f"Opened: {self.logs_dir}"
+        except Exception as e:
+            return False, str(e)

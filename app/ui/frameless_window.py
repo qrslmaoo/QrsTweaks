@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox
 )
-from PySide6.QtCore import Qt, QEvent, QRectF
+from PySide6.QtCore import Qt, QEvent, QRectF, Signal
 from PySide6.QtGui import QMouseEvent, QPainter, QColor, QPainterPath
 
 
@@ -9,17 +9,65 @@ class TitleBar(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
         self._drag_pos = None
-        self.setFixedHeight(40)
+        self.setFixedHeight(44)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(10)
 
-        self.label = QLabel("QrsTweaks Suite")
-        self.label.setStyleSheet("color:#DDE1EA; font-size:11pt; font-weight:600;")
+        self.label = QLabel("QrsTweaks")
+        self.label.setStyleSheet("color:#DDE1EA; font-size:11.5pt; font-weight:700;")
         layout.addWidget(self.label)
         layout.addStretch()
 
-        self.btn_min = QPushButton("-")
+        # ---- Profile combo + Apply button (top-right) ----
+        self.profile_combo = QComboBox()
+        self.profile_combo.addItems(["Gaming Mode", "Productivity Mode", "Streaming Mode"])
+        self.profile_combo.setCurrentIndex(0)  # Reset to Gaming on launch
+        self.profile_combo.setFixedHeight(30)
+        self.profile_combo.setStyleSheet("""
+            QComboBox {
+                color: #DDE1EA;
+                background: rgba(255,255,255,0.08);
+                border: 1px solid rgba(255,255,255,0.18);
+                border-radius: 6px;
+                padding: 2px 8px;
+            }
+            QComboBox::drop-down {
+                width: 24px;
+                border-left: 1px solid rgba(255,255,255,0.18);
+            }
+            QComboBox:hover {
+                background: rgba(255,255,255,0.14);
+            }
+            QAbstractItemView {
+                color:#DDE1EA;
+                background: rgba(24,26,32,0.95);
+                selection-background-color: rgba(120,200,255,0.25);
+                border: 1px solid rgba(255,255,255,0.12);
+            }
+        """)
+
+        self.btn_apply_profile = QPushButton("Apply Profile")
+        self.btn_apply_profile.setFixedHeight(30)
+        self.btn_apply_profile.setStyleSheet("""
+            QPushButton {
+                color:#EAF2FF;
+                background: rgba(120,200,255,0.18);
+                border: 1px solid rgba(120,200,255,0.35);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(120,200,255,0.28);
+            }
+        """)
+        layout.addWidget(self.profile_combo)
+        layout.addWidget(self.btn_apply_profile)
+
+        # ---- Window buttons ----
+        self.btn_min = QPushButton("–")
         self.btn_max = QPushButton("□")
         self.btn_close = QPushButton("✕")
 
@@ -43,6 +91,17 @@ class TitleBar(QWidget):
         self.btn_min.clicked.connect(self.window().showMinimized)
         self.btn_max.clicked.connect(parent.toggle_max)
 
+        # Relay profile apply from TitleBar to the window
+        self.btn_apply_profile.clicked.connect(self._emit_apply_profile)
+
+    def _emit_apply_profile(self):
+        win = self.window()
+        if hasattr(win, "profileApplyRequested"):
+            try:
+                win.profileApplyRequested.emit(self.profile_combo.currentText())
+            except Exception:
+                pass
+
     # ---- Window dragging ----
     def mousePressEvent(self, e: QMouseEvent):
         if e.button() == Qt.LeftButton:
@@ -65,9 +124,9 @@ class ChromeWidget(QWidget):
         self._radius = 12
         self._constructed = True
 
-        # Appearance controls
-        self._blur_alpha = 0.88     # previously 0.78 — less transparent
-        self._base_color = QColor(22, 24, 30)
+        # Appearance controls (darkened a bit for readability)
+        self._blur_alpha = 0.92
+        self._base_color = QColor(20, 22, 28)
 
     def paintEvent(self, event):
         if not getattr(self, "_constructed", False):
@@ -78,11 +137,11 @@ class ChromeWidget(QWidget):
             return
         painter.setRenderHint(QPainter.Antialiasing, True)
 
-        # Fully clear surface first
+        # Clear
         painter.setCompositionMode(QPainter.CompositionMode_Source)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
 
-        # Draw rounded translucent glass background
+        # Rounded glass background
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         path = QPainterPath()
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
@@ -92,15 +151,17 @@ class ChromeWidget(QWidget):
         bg.setAlphaF(self._blur_alpha)
         painter.fillPath(path, bg)
 
-        # Subtle glowing edge border for depth
-        border_color = QColor(255, 255, 255, 18)
+        # Subtle border glow
+        border_color = QColor(180, 220, 255, 26)
         painter.setPen(border_color)
         painter.drawPath(path)
-
         painter.end()
 
 
 class FramelessWindow(QWidget):
+    # Emitted when user clicks "Apply Profile" (payload: profile string)
+    profileApplyRequested = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._constructed = False

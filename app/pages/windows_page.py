@@ -3,6 +3,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from app.ui.widgets.card import Card
+    # Card/toggle/indicators unchanged
 from app.ui.widgets.toggle import Toggle
 from app.ui.widgets.glow_indicator import GlowIndicator
 from app.ui.animations import fade_in, slide_in_y
@@ -78,38 +79,30 @@ class WindowsPage(QWidget):
         root.addWidget(scan)
 
         # =================== Row 1 (existing) ===================
-        row1 = QHBoxLayout()
-        row1.setSpacing(12)
+        row1 = QHBoxLayout(); row1.setSpacing(12)
 
-        power = Card("Power Plan")
-        pv = power.body()
-        self.turbo = Toggle()
-        pv.addWidget(self.turbo)
+        power = Card("Power Plan"); pv = power.body()
+        self.turbo = Toggle(); pv.addWidget(self.turbo)
         self.btn_plan = QPushButton("Create High Performance Plan")
         pv.addWidget(self.btn_plan)
 
-        clean = Card("Cleanup")
-        cv = clean.body()
+        clean = Card("Cleanup"); cv = clean.body()
         self.btn_clean = QPushButton("Clean Temp Files")
         cv.addWidget(self.btn_clean)
 
-        safety = Card("Safety")
-        sv2 = safety.body()
+        safety = Card("Safety"); sv2 = safety.body()
         self.btn_restore = QPushButton("Create Restore Point")
         sv2.addWidget(self.btn_restore)
 
-        row1.addWidget(power)
-        row1.addWidget(clean)
-        row1.addWidget(safety)
+        row1.addWidget(power); row1.addWidget(clean); row1.addWidget(safety)
         root.addLayout(row1)
 
         # =================== Row 2 (existing) ===================
-        row2 = QHBoxLayout()
-        row2.setSpacing(12)
+        row2 = QHBoxLayout(); row2.setSpacing(12)
 
         leak = Card("Memory-Leak Protector"); lv = leak.body()
         self.btn_ml_start = QPushButton("Start (Fortnite, 1024 MB)")
-        self.btn_ml_stop = QPushButton("Stop")
+        self.btn_ml_stop  = QPushButton("Stop")
         lv.addWidget(self.btn_ml_start); lv.addWidget(self.btn_ml_stop)
 
         net = Card("Network Optimizer"); nv = net.body()
@@ -132,67 +125,48 @@ class WindowsPage(QWidget):
         row2.addWidget(leak); row2.addWidget(net); row2.addWidget(startup)
         root.addLayout(row2)
 
-        # =================== Row 3 (AI Network & Deep Cleanup) ===================
+        # =================== Row 3 (NEW: Task Scheduler + Storage Tools) ===================
         row3 = QHBoxLayout(); row3.setSpacing(12)
 
-        ai_net = Card("Network & Latency AI")
-        an = ai_net.body()
-        self.btn_ai_net_start = QPushButton("Adaptive DNS (Pick Fastest)")
-        self.btn_ai_net_repair = QPushButton("Auto-Repair Connection")
-        an.addWidget(self.btn_ai_net_start)
-        an.addWidget(self.btn_ai_net_repair)
+        tasks = Card("Task Scheduler Tweaks")
+        tk = tasks.body()
+        self.btn_tasks_list     = QPushButton("List Common Telemetry / Xbox Tasks")
+        self.btn_tasks_disable  = QPushButton("Disable Telemetry Tasks")
+        self.btn_tasks_enable   = QPushButton("Enable Telemetry Tasks")
+        self.btn_xbox_disable   = QPushButton("Disable Xbox Tasks")
+        self.btn_xbox_enable    = QPushButton("Enable Xbox Tasks")
+        for b in (self.btn_tasks_list, self.btn_tasks_disable, self.btn_tasks_enable,
+                  self.btn_xbox_disable, self.btn_xbox_enable):
+            tk.addWidget(b)
 
-        deep_cleanup = Card("Deep Cleanup Engine")
-        dcl = deep_cleanup.body()
-        self.btn_clean_browsers = QPushButton("Clean Browser Caches (Chrome/Edge/Firefox)")
-        self.btn_clean_updates  = QPushButton("Windows Update Cleanup (WinSxS/DO)")
-        self.btn_clean_residue  = QPushButton("Find App Residue")
-        dcl.addWidget(self.btn_clean_browsers)
-        dcl.addWidget(self.btn_clean_updates)
-        dcl.addWidget(self.btn_clean_residue)
+        storage = Card("Storage Tools")
+        st = storage.body()
+        self.btn_storage_analyze  = QPushButton("Analyze Disk Usage")
+        self.btn_storage_winsxs   = QPushButton("Compact WinSxS (DISM)")
+        self.btn_storage_prefetch = QPushButton("Purge Prefetch Cache")
+        self.btn_storage_old      = QPushButton("Remove Windows.old (if present)")
+        for b in (self.btn_storage_analyze, self.btn_storage_winsxs,
+                  self.btn_storage_prefetch, self.btn_storage_old):
+            st.addWidget(b)
 
-        row3.addWidget(ai_net)
-        row3.addWidget(deep_cleanup)
+        row3.addWidget(tasks)
+        row3.addWidget(storage)
         root.addLayout(row3)
 
-        # =================== Row 4 (Services/Process + Storage) ===================
+        # =================== Row 4 (Restore Defaults & Logs) ===================
         row4 = QHBoxLayout(); row4.setSpacing(12)
 
-        svc_proc = Card("Service & Process Optimizer")
-        sp = svc_proc.body()
-        self.btn_svc_profile = QPushButton("Disable Telemetry + SysMain")
-        self.btn_proc_govern = QPushButton("Throttle Background CPU (BelowNormal)")
-        self.btn_proc_heavy  = QPushButton("List Heavy Background Processes")
-        self.btn_driver_check = QPushButton("GPU Driver Versions")
-        sp.addWidget(self.btn_svc_profile); sp.addWidget(self.btn_proc_govern)
-        sp.addWidget(self.btn_proc_heavy);  sp.addWidget(self.btn_driver_check)
+        restore = Card("Restore Defaults & Logs")
+        rs = restore.body()
+        self.btn_restore_defaults = QPushButton("Restore Defaults (Revert Common Tweaks)")
+        self.btn_logs_export      = QPushButton("Export Logs (zip)")
+        self.btn_logs_open        = QPushButton("Open Logs Folder")
+        rs.addWidget(self.btn_restore_defaults)
+        rs.addWidget(self.btn_logs_export)
+        rs.addWidget(self.btn_logs_open)
 
-        storage = Card("Storage Optimization")
-        st = storage.body()
-        self.btn_trim = QPushButton("TRIM SSDs (/C /L)")
-        self.btn_defrag = QPushButton("Defrag HDDs (Safe Example)")
-        self.btn_largefiles = QPushButton("Find Large Files (>500MB)")
-        self.btn_dupes = QPushButton("Duplicate Finder (Hash, limited)")
-        st.addWidget(self.btn_trim); st.addWidget(self.btn_defrag)
-        st.addWidget(self.btn_largefiles); st.addWidget(self.btn_dupes)
-
-        row4.addWidget(svc_proc); row4.addWidget(storage)
+        row4.addWidget(restore)
         root.addLayout(row4)
-
-        # =================== Row 5 (Security & Stability) ===================
-        row5 = QHBoxLayout(); row5.setSpacing(12)
-
-        sec = Card("Security & Stability Tools")
-        se = sec.body()
-        self.btn_snapshot = QPushButton("Create Snapshot (Pre-Tweak)")
-        self.btn_flag_unsigned = QPushButton("Flag Unsigned/Unknown Processes")
-        self.btn_winsock_reset = QPushButton("Network Reset (Winsock/DNS)")
-        self.btn_sfc = QPushButton("System File Check (SFC /scannow)")
-        se.addWidget(self.btn_snapshot); se.addWidget(self.btn_flag_unsigned)
-        se.addWidget(self.btn_winsock_reset); se.addWidget(self.btn_sfc)
-
-        row5.addWidget(sec)
-        root.addLayout(row5)
 
         # Finish inner setup and mount into scroll area
         root.addStretch()
@@ -218,37 +192,29 @@ class WindowsPage(QWidget):
         self.btn_ctcp_off.clicked.connect(lambda: self._call(self.opt.enable_ctcp, "CTCP", False))
         self.btn_auto_norm.clicked.connect(lambda: self._call(self.opt.autotuning, "TCP", "normal"))
         self.btn_auto_restr.clicked.connect(lambda: self._call(self.opt.autotuning, "TCP", "restricted"))
-        self.btn_nagle_off.clicked.connect(lambda: self._call(self.opt.toggle_nagle, "Nagle", False))
+        self.btn_nagle_off.clicked.connect(lambda: self._call(self.opt.toggle_nagle, "Nagle", True))
         self.btn_ping.clicked.connect(lambda: self._ping())
-
         self.btn_list_startup.clicked.connect(self._startup_list)
 
-        # NEW: AI network, cleanup, services/process, storage, security
-        self.btn_ai_net_start.clicked.connect(lambda: self._call(self.opt.adaptive_dns_auto, "AI-Net"))
-        self.btn_ai_net_repair.clicked.connect(lambda: self._call(self.opt.auto_network_repair, "AI-Net"))
+        # NEW: Task Scheduler + Storage + Restore Defaults + Logs
+        self.btn_tasks_list.clicked.connect(lambda: self._call(self.opt.list_common_tasks, "Tasks"))
+        self.btn_tasks_disable.clicked.connect(lambda: self._call(self.opt.disable_telemetry_tasks, "Tasks"))
+        self.btn_tasks_enable.clicked.connect(lambda: self._call(self.opt.enable_telemetry_tasks, "Tasks"))
+        self.btn_xbox_disable.clicked.connect(lambda: self._call(self.opt.disable_xbox_tasks, "Tasks"))
+        self.btn_xbox_enable.clicked.connect(lambda: self._call(self.opt.enable_xbox_tasks, "Tasks"))
 
-        self.btn_clean_browsers.clicked.connect(lambda: self._call(self.opt.clean_browser_caches, "Cleanup"))
-        self.btn_clean_updates.clicked.connect(lambda: self._call(self.opt.windows_update_cleanup, "Cleanup"))
-        self.btn_clean_residue.clicked.connect(lambda: self._call(self.opt.find_app_residue, "Cleanup"))
+        self.btn_storage_analyze.clicked.connect(lambda: self._call(self.opt.analyze_disk_usage, "Storage"))
+        self.btn_storage_winsxs.clicked.connect(lambda: self._call(self.opt.compact_winsxs, "Storage"))
+        self.btn_storage_prefetch.clicked.connect(lambda: self._call(self.opt.purge_prefetch_cache, "Storage"))
+        self.btn_storage_old.clicked.connect(lambda: self._call(self.opt.remove_windows_old, "Storage"))
 
-        self.btn_svc_profile.clicked.connect(lambda: self._call(self.opt.apply_minimal_services, "Services"))
-        self.btn_proc_govern.clicked.connect(lambda: self._call(self.opt.throttle_background_cpu, "Processes"))
-        self.btn_proc_heavy.clicked.connect(lambda: self._call(self.opt.list_heavy_processes, "Processes"))
-        self.btn_driver_check.clicked.connect(lambda: self._call(self.opt.driver_version_integrity, "Drivers"))
-
-        self.btn_trim.clicked.connect(lambda: self._call(self.opt.trim_ssds, "Storage"))
-        self.btn_defrag.clicked.connect(lambda: self._call(self.opt.defrag_hdds_safe, "Storage"))
-        self.btn_largefiles.clicked.connect(lambda: self._call(self.opt.find_large_files, "Storage"))
-        self.btn_dupes.clicked.connect(lambda: self._call(self.opt.duplicate_finder, "Storage"))
-
-        self.btn_snapshot.clicked.connect(lambda: self._call(self.opt.create_snapshot, "Security"))
-        self.btn_flag_unsigned.clicked.connect(lambda: self._call(self.opt.flag_unsigned_processes, "Security"))
-        self.btn_winsock_reset.clicked.connect(lambda: self._call(self.opt.winsock_dns_reset, "Security"))
-        self.btn_sfc.clicked.connect(lambda: self._call(self.opt.sfc_scannow, "Security"))
+        self.btn_restore_defaults.clicked.connect(lambda: self._call(self.opt.restore_defaults, "Restore"))
+        self.btn_logs_export.clicked.connect(lambda: self._call(self.opt.export_logs_zip, "Logs"))
+        self.btn_logs_open.clicked.connect(lambda: self._call(self.opt.open_logs_folder, "Logs"))
 
         # Animations
         for w in (status_card, scan, power, clean, safety, leak, net, startup,
-                  ai_net, deep_cleanup, svc_proc, storage, sec):
+                  tasks, storage, restore):
             fade_in(w); slide_in_y(w)
 
         # Initial status refresh
