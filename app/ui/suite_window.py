@@ -1,12 +1,6 @@
 # app/ui/suite_window.py
-from shiboken6 import delete
-
-from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout,
-    QLabel, QPushButton, QScrollArea
-)
-from PySide6.QtCore import Qt
-
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QApplication
+from PySide6.QtCore import Qt, QTimer, QSize
 from app.ui.frameless_window import FramelessWindow
 from app.pages.windows_page import WindowsPage
 from app.pages.games_page import GamesPage
@@ -17,144 +11,129 @@ class SuiteWindow(FramelessWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # ----------------------------------------------------------
-        # MAIN LAYOUT
-        # ----------------------------------------------------------
-        root = QHBoxLayout(self.center)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        # ----------------------------------------
+        # Default window size and minimums
+        # ----------------------------------------
+        self.resize(1200, 620)         # width x height
+        self.setMinimumSize(1000, 580) # smaller baseline
 
-        # ----------------------------------------------------------
-        # SIDEBAR
-        # ----------------------------------------------------------
-        sidebar = QWidget(objectName="Sidebar")
-        sidebar.setFixedWidth(220)
-        sidebar.setStyleSheet("""
-            #Sidebar {
-                background: rgba(255,255,255,0.06);
+        layout = QHBoxLayout(self.center)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Sidebar setup
+        self.sidebar = QWidget()
+        self.sidebar.setFixedWidth(200)
+        self.sidebar.setStyleSheet("""
+            QWidget {
+                background-color: rgba(10,10,14,0.88);
+                border-top-left-radius: 10px;
+                border-bottom-left-radius: 10px;
+            }
+            QPushButton {
+                background-color: transparent;
+                color: #DDE1EA;
+                border-radius: 8px;
+                padding: 8px 12px;
+                text-align: left;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: rgba(255,255,255,0.08);
+            }
+            QPushButton:checked {
+                background-color: rgba(255,255,255,0.18);
+                font-weight: 600;
             }
         """)
 
-        sb = QVBoxLayout(sidebar)
-        sb.setContentsMargins(12, 20, 12, 20)
-        sb.setSpacing(12)
+        side_layout = QVBoxLayout(self.sidebar)
+        side_layout.setContentsMargins(8, 12, 8, 12)
+        side_layout.setSpacing(4)
 
-        title = QLabel("QrsTweaks Suite")
-        title.setStyleSheet("color:#DDE1EA; font-size:14pt; font-weight:600;")
-        sb.addWidget(title)
-        sb.addSpacing(8)
-
-        # Sidebar buttons
-        self.btn_win = QPushButton("  Windows Optimizer")
-        self.btn_games = QPushButton("  Games")
-        self.btn_pass = QPushButton("  Passwords")
+        self.btn_win = QPushButton("Windows Optimizer")
+        self.btn_games = QPushButton("Games")
+        self.btn_pass = QPushButton("Passwords")
 
         for b in (self.btn_win, self.btn_games, self.btn_pass):
-            b.setCursor(Qt.PointingHandCursor)
             b.setCheckable(True)
-            b.setFixedHeight(40)
-            b.setStyleSheet("""
-                QPushButton {
-                    text-align: left;
-                    padding-left: 14px;
-                    background: rgba(255,255,255,0.08);
-                    color: #DDE1EA;
-                    border-radius: 8px;
-                    font-size: 11pt;
-                }
-                QPushButton:hover { background: rgba(255,255,255,0.16); }
-                QPushButton:checked { background: rgba(255,255,255,0.24); }
-            """)
-            sb.addWidget(b)
+            side_layout.addWidget(b)
 
-        sb.addStretch()
-        root.addWidget(sidebar)
+        side_layout.addStretch()
+        layout.addWidget(self.sidebar)
 
-        # ----------------------------------------------------------
-        # SCROLL AREA
-        # ----------------------------------------------------------
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.scroll.setObjectName("ScrollArea")
-        self.scroll.setStyleSheet("""
-            QScrollArea { border: none; background: transparent; }
+        # Central stacked area
+        self.stack = QStackedWidget()
+        layout.addWidget(self.stack)
 
-            QScrollBar:vertical {
-                width: 10px;
-                background: transparent;
-            }
-            QScrollBar::handle:vertical {
-                background: rgba(255,255,255,0.20);
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: rgba(255,255,255,0.35);
-            }
-            QScrollBar::add-line, QScrollBar::sub-line {
-                height: 0px;
-            }
-        """)
-        root.addWidget(self.scroll, 1)
+        # Instantiate pages once
+        self.page_win = WindowsPage()
+        self.page_games = GamesPage()
+        self.page_pass = PasswordsPage()
 
-        # ----------------------------------------------------------
-        # BUTTON CONNECTIONS
-        # ----------------------------------------------------------
-        self.btn_win.clicked.connect(lambda: self.load_page("win"))
-        self.btn_games.clicked.connect(lambda: self.load_page("games"))
-        self.btn_pass.clicked.connect(lambda: self.load_page("pass"))
+        self.stack.addWidget(self.page_win)
+        self.stack.addWidget(self.page_games)
+        self.stack.addWidget(self.page_pass)
 
-        # ----------------------------------------------------------
-        # LOAD DEFAULT PAGE
-        # ----------------------------------------------------------
-        self.load_page("win")
+        # Button connections
+        self.btn_win.clicked.connect(lambda: self._switch_page(0))
+        self.btn_games.clicked.connect(lambda: self._switch_page(1))
+        self.btn_pass.clicked.connect(lambda: self._switch_page(2))
 
-    # ===================================================================
-    #           HARD DELETE TO PREVENT DUPLICATION + GHOST LAYERS
-    # ===================================================================
-    def _destroy_page(self):
-        old = self.scroll.takeWidget()
-        if old is not None:
-            old.setParent(None)
-            delete.delete(old)        # ✅ Immediate destruction (not delayed)
-            return True
-        return False
+        self.btn_win.setChecked(True)
+        self.stack.setCurrentIndex(0)
 
-    # ===================================================================
-    #                           LOAD PAGE
-    # ===================================================================
-    def load_page(self, key: str):
+        # Delay re-layout slightly to ensure all child pages are fully sized
+        QTimer.singleShot(300, self._initial_layout_fix)
 
-        # -------- DESTROY OLD PAGE IMMEDIATELY --------
-        self._destroy_page()
+    # ---------------------------------------------------
+    # Page switching
+    # ---------------------------------------------------
+    def _switch_page(self, index: int):
+        for b in (self.btn_win, self.btn_games, self.btn_pass):
+            b.setChecked(False)
+        (self.btn_win, self.btn_games, self.btn_pass)[index].setChecked(True)
 
-        # -------- BUILD NEW PAGE --------
-        if key == "win":
-            page = WindowsPage()
-            self.btn_win.setChecked(True)
-            self.btn_games.setChecked(False)
-            self.btn_pass.setChecked(False)
+        # Force resize + reflow before switch
+        self._force_reflow()
+        QApplication.processEvents()
 
-        elif key == "games":
-            page = GamesPage()
-            self.btn_win.setChecked(False)
-            self.btn_games.setChecked(True)
-            self.btn_pass.setChecked(False)
+        self.stack.setCurrentIndex(index)
 
-        else:
-            page = PasswordsPage()
-            self.btn_win.setChecked(False)
-            self.btn_games.setChecked(False)
-            self.btn_pass.setChecked(True)
+        # Delay again slightly to ensure the switch is rendered cleanly
+        QTimer.singleShot(50, self._force_reflow)
 
-        # -------- WRAP PAGE IN A CONTAINER --------
-        container = QWidget()
-        lay = QVBoxLayout(container)
-        lay.setContentsMargins(20, 20, 20, 20)
-        lay.setSpacing(20)
-        lay.addWidget(page)
-        lay.addStretch()
+    # ---------------------------------------------------
+    # Fix layout reflow issues
+    # ---------------------------------------------------
+    def _force_reflow(self):
+        self.stack.setMinimumSize(1, 1)
+        self.stack.adjustSize()
+        for i in range(self.stack.count()):
+            w = self.stack.widget(i)
+            if w:
+                w.adjustSize()
+                w.updateGeometry()
+        self.center.updateGeometry()
+        self.updateGeometry()
+        self.resize(self.size())  # Forces internal geometry sync
+        QApplication.processEvents()
 
-        # -------- INSERT INTO SCROLLAREA --------
-        self.scroll.setWidget(container)
+    # ---------------------------------------------------
+    # Initial window layout on startup
+    # ---------------------------------------------------
+    def _initial_layout_fix(self):
+        """Ensures proper geometry when window first shows."""
+        self._force_reflow()
+        self.adjustSize()
+        self.resize(self.sizeHint())
+        self.update()
+        QApplication.processEvents()
+
+    # ---------------------------------------------------
+    # Resize event hook
+    # ---------------------------------------------------
+    def resizeEvent(self, event):
+        """Guarantees children expand fully after resize."""
+        super().resizeEvent(event)
+        QTimer.singleShot(30, self._force_reflow)
