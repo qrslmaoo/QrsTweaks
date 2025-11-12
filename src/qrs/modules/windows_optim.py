@@ -2,18 +2,17 @@
 from __future__ import annotations
 
 import os
-import sys
 import json
-import zipfile
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 
 import psutil
 import winreg
 
 
+# ---------------- Utilities ----------------
 def is_admin() -> bool:
     try:
         import ctypes
@@ -23,12 +22,23 @@ def is_admin() -> bool:
 
 
 def run_ps(script: str) -> subprocess.CompletedProcess:
+    """Run PowerShell inline, capture output, no new window."""
     return subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        text=True,
-        capture_output=True,
+        text=True, capture_output=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
     )
+
+
+def run_ps_elevated_blocking(script: str) -> bool:
+    """Request elevation, run script in a new PowerShell as admin, wait for completion."""
+    esc = script.replace("'", "''")
+    wrapper = (
+        "Start-Process powershell -Verb RunAs "
+        f"'-NoProfile -ExecutionPolicy Bypass -Command \"{esc}\"' -Wait"
+    )
+    r = run_ps(wrapper)
+    return r.returncode == 0
 
 
 def bytes_fmt(n: int) -> str:
@@ -70,7 +80,6 @@ class WindowsOptimizer:
             (Path(r"C:\Windows\Prefetch"), "Prefetch"),
             (Path(r"C:\Windows\SoftwareDistribution\Download"), "Windows Update Cache"),
         ]
-
         total_bytes = 0
         total_files = 0
         report = []
@@ -97,7 +106,7 @@ class WindowsOptimizer:
         report.append(f"Estimated cleanable space: {bytes_fmt(total_bytes)}")
         return "\n".join(report)
 
-    # ---------------- Status helpers (unchanged) ----------------
+    # ---------------- Status helpers (already used elsewhere) ----------------
     def is_high_perf_plan(self) -> bool:
         try:
             output = subprocess.check_output(["powercfg", "/getactivescheme"], text=True).lower()
@@ -153,14 +162,14 @@ class WindowsOptimizer:
             data = json.loads(out.stdout)
             if isinstance(data, dict):
                 data = [data]
-            names = {d["Name"]: (str(d.get("StartType", "")).lower(), str(d.get("Status", "")).lower()) for d in data}
-            sysmain_ok = ("sysmain" in names) and (names["sysmain"][0] == "disabled")
-            diag_ok = ("diagtrack" in names) and (names["diagtrack"][0] == "disabled")
+            names = {d.get("Name"): (str(d.get("StartType", "")).lower(), str(d.get("Status", "")).lower()) for d in data}
+            sysmain_ok = ("SysMain" in names) and (names["SysMain"][0] == "disabled")
+            diag_ok = ("DiagTrack" in names) and (names["DiagTrack"][0] == "disabled")
             return sysmain_ok and diag_ok
         except Exception:
             return False
 
-    # ---------------- Core actions ----------------
+    # ---------------- Basic actions ----------------
     def create_high_perf_powerplan(self) -> Tuple[bool, str]:
         if not is_admin():
             return False, "Admin required for power plan."
@@ -194,7 +203,7 @@ class WindowsOptimizer:
             return True, "Restore point created."
         return False, (cp.stderr or cp.stdout or "Failed to create restore point.")
 
-    # ---------------- Network / other (unchanged) ----------------
+    # ---------------- Network helpers ----------------
     def set_dns(self, primary: str, secondary: str) -> Tuple[bool, str]:
         if not is_admin():
             return False, "Admin required to set DNS."
@@ -277,7 +286,7 @@ class WindowsOptimizer:
                 pass
         return results
 
-    # ---------------- Deep Cleanup (as before) ----------------
+    # ---------------- Deep Cleanup (existing) ----------------
     def _delete_tree_best_effort(self, path: Path) -> Tuple[int, int]:
         files = 0
         bytes_sum = 0
@@ -339,13 +348,9 @@ class WindowsOptimizer:
         if not target.exists():
             return True, "Windows.old not present."
         if not is_admin():
-            ps = (
-                "Start-Process -Verb RunAs powershell "
-                "'-NoProfile -Command Remove-Item -LiteralPath ''C:\\Windows.old'' -Recurse -Force -ErrorAction SilentlyContinue'"
-            )
-            res = run_ps(ps)
-            if res.returncode == 0:
-                return True, "Windows.old removal requested with elevation (check disk space)."
+            ps = r"Remove-Item -LiteralPath 'C:\Windows.old' -Recurse -Force -ErrorAction SilentlyContinue"
+            ok = run_ps_elevated_blocking(ps)
+            return ok, "Windows.old removal requested with elevation." if ok else "Windows.old removal failed."
         files, size = self._delete_tree_best_effort(target)
         try:
             target.rmdir()
@@ -391,20 +396,15 @@ class WindowsOptimizer:
         mult = {"KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}.get(unit, 1)
         return int(val * mult)
 
-    # ---------------- Storage Tools (thread-friendly) ----------------
+    # ---------------- Storage Tools ----------------
     def _excluded_dirs(self) -> List[str]:
-        return [
-            r"C:\Windows",
-            r"C:\Program Files",
-            r"C:\Program Files (x86)",
-        ]
+        return [r"C:\Windows", r"C:\Program Files", r"C:\Program Files (x86)"]
 
     def _should_skip_dir(self, abspath: str) -> bool:
         abspath_norm = abspath.rstrip("\\").lower()
         for ex in self._excluded_dirs():
             if abspath_norm.startswith(ex.lower()):
                 return True
-        # Skip some notorious heavy/system places that add no value
         bad_names = {"system volume information", "$recycle.bin", "windowsapps"}
         tail = os.path.basename(abspath_norm)
         if tail in bad_names:
@@ -412,26 +412,22 @@ class WindowsOptimizer:
         return False
 
     def analyze_largest_files(self, limit: int = 25) -> Tuple[bool, str]:
-        root = r"C:\\"  # full C drive, with exclusions
+        root = r"C:\\"
         results: List[Tuple[int, str]] = []
         for current_root, dirs, files in os.walk(root, topdown=True):
             try:
-                # Prune excluded folders in-place for performance
                 dirs[:] = [d for d in dirs if not self._should_skip_dir(os.path.join(current_root, d))]
             except Exception:
                 dirs[:] = []
-
             for f in files:
                 fp = os.path.join(current_root, f)
                 try:
-                    # Avoid following symlinks/reparse points
                     if os.path.islink(fp):
                         continue
                     size = os.stat(fp, follow_symlinks=False).st_size
                     results.append((size, fp))
                 except Exception:
                     pass
-
         results.sort(reverse=True)
         top = results[:limit]
         if not top:
@@ -444,16 +440,11 @@ class WindowsOptimizer:
         return True, "\n".join(lines)
 
     def analyze_top_dirs(self, limit: int = 10) -> Tuple[bool, str]:
-        """
-        Group usage by top-level directory under C:\\ (excluding Windows/Program Files trees).
-        This is far faster than per-dir deep accumulation while still surfacing where space goes.
-        """
         from collections import defaultdict
         root = r"C:\\"
         by_toplevel = defaultdict(int)
 
         def top_key(path: str) -> str:
-            # "C:\something\..." => "C:\something"
             p = Path(path)
             parts = p.parts
             if len(parts) >= 2:
@@ -465,9 +456,7 @@ class WindowsOptimizer:
                 dirs[:] = [d for d in dirs if not self._should_skip_dir(os.path.join(current_root, d))]
             except Exception:
                 dirs[:] = []
-
             key = top_key(current_root)
-            # only count file sizes; directories will aggregate as we walk
             for f in files:
                 fp = os.path.join(current_root, f)
                 try:
@@ -477,7 +466,6 @@ class WindowsOptimizer:
                 except Exception:
                     pass
 
-        # Drop excluded tops explicitly
         for ex in self._excluded_dirs():
             by_toplevel.pop(ex, None)
 
@@ -493,9 +481,7 @@ class WindowsOptimizer:
         if not is_admin():
             return False, "Admin required."
         r = run_ps("defrag /C /L")
-        if r.returncode == 0:
-            return True, "SSD TRIM executed successfully."
-        return False, r.stderr or r.stdout or "TRIM failed."
+        return (r.returncode == 0), (r.stdout or r.stderr or "SSD TRIM executed.")
 
     def optimize_hdd_defrag(self) -> Tuple[bool, str]:
         if not is_admin():
@@ -508,45 +494,40 @@ class WindowsOptimizer:
         if not is_admin():
             return False, "Admin required."
         lines = []
-        do_cache = Path(r"C:\ProgramData\Microsoft\Windows\DeliveryOptimization\Cache")
-        f1, b1 = self._delete_tree_best_effort(do_cache)
-        lines.append(f"Delivery Optimization cache: {f1:,} files, {bytes_fmt(b1)} reclaimed.")
+        def _wipe(p: str):
+            f = run_ps(f"Remove-Item -LiteralPath '{p}' -Recurse -Force -ErrorAction SilentlyContinue")
+            return "OK" if f.returncode == 0 else "Skipped"
 
-        sw = Path(r"C:\Windows\SoftwareDistribution\Download")
-        f2, b2 = self._delete_tree_best_effort(sw)
-        lines.append(f"Windows Update cache: {f2:,} files, {bytes_fmt(b2)} reclaimed.")
+        do_cache = r"C:\ProgramData\Microsoft\Windows\DeliveryOptimization\Cache"
+        lines.append(f"Delivery Optimization cache: {_wipe(do_cache)}")
+
+        sw = r"C:\Windows\SoftwareDistribution\Download"
+        lines.append(f"Windows Update cache: {_wipe(sw)}")
 
         d1 = run_ps("DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase")
         lines.append("DISM StartComponentCleanup: " + ("OK" if d1.returncode == 0 else "Failed"))
-
         d2 = run_ps("Dism.exe /Online /Cleanup-Image /SPSuperseded")
-        if d2.returncode != 0:
-            lines.append("SPSuperseded: Skipped/Not applicable.")
-        else:
-            lines.append("SPSuperseded: OK")
-
+        lines.append("SPSuperseded: " + ("OK" if d2.returncode == 0 else "Skipped/Not applicable."))
         return True, "[Windows Update Cleanup]\n- " + "\n- ".join(lines)
 
     def check_drive_health(self) -> Tuple[bool, str]:
-        if is_admin():
+        try:
             ps = r"(Get-PhysicalDisk | Select-Object FriendlyName,HealthStatus,MediaType,Size | ConvertTo-Json)"
             r = run_ps(ps)
             if r.returncode == 0 and r.stdout.strip():
-                try:
-                    data = json.loads(r.stdout)
-                    if isinstance(data, dict):
-                        data = [data]
-                    lines = ["[Drive Health]"]
-                    for d in data:
-                        name = d.get("FriendlyName", "Disk")
-                        health = d.get("HealthStatus", "Unknown")
-                        mtype = d.get("MediaType", "Unknown")
-                        size = int(d.get("Size") or 0)
-                        lines.append(f"  - {name}: {health} | {mtype} | {bytes_fmt(size)}")
-                    return True, "\n".join(lines)
-                except Exception:
-                    pass
-
+                data = json.loads(r.stdout)
+                if isinstance(data, dict):
+                    data = [data]
+                lines = ["[Drive Health]"]
+                for d in data:
+                    name = d.get("FriendlyName", "Disk")
+                    health = d.get("HealthStatus", "Unknown")
+                    mtype = d.get("MediaType", "Unknown")
+                    size = int(d.get("Size") or 0)
+                    lines.append(f"  - {name}: {health} | {mtype} | {bytes_fmt(size)}")
+                return True, "\n".join(lines)
+        except Exception:
+            pass
         try:
             out = subprocess.check_output(["wmic", "diskdrive", "get", "status,model,size"], text=True)
             lines = ["[Drive Health] (WMIC)"]
@@ -559,173 +540,7 @@ class WindowsOptimizer:
         except Exception as e:
             return False, f"[Drive Health] Failed: {e}"
 
-    # ---------------- Misc extras kept for compatibility ----------------
-    def start_memleak_protector(self, process_names: List[str], mb_threshold: int) -> Tuple[bool, str]:
-        return True, f"MemLeak guard armed for {', '.join(process_names)} @ {mb_threshold} MB."
-
-    def stop_memleak_protector(self) -> Tuple[bool, str]:
-        return True, "MemLeak guard disarmed."
-
-    def windows_update_cleanup(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        dism = run_ps("DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase")
-        ok = dism.returncode == 0
-        msg = (dism.stdout or dism.stderr or "").strip()
-        return ok, ("Windows Update cleanup finished." if ok else msg)
-
-    def find_app_residue(self) -> Tuple[bool, str]:
-        roots = [Path.home() / "AppData/Local", Path.home() / "AppData/Roaming", Path(r"C:\ProgramData")]
-        suspicious = []
-        for r in roots:
-            if not r.exists():
-                continue
-            for d in r.iterdir():
-                try:
-                    if d.is_dir() and (d.name.lower().startswith("uninstall") or "temp" in d.name.lower()):
-                        suspicious.append(str(d))
-                except Exception:
-                    pass
-        return True, "\n".join(suspicious[:100]) if suspicious else "No obvious residue found."
-
-    def apply_minimal_services(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        script = r"""
-$names = @('DiagTrack','SysMain')
-foreach ($n in $names) {
-    $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
-    if ($svc) {
-        Set-Service -Name $n -StartupType Disabled
-        if ($svc.Status -eq 'Running') { Stop-Service -Name $n -Force -ErrorAction SilentlyContinue }
-    }
-}
-"""
-        r = run_ps(script)
-        return (r.returncode == 0), (r.stderr or r.stdout or "Applied minimal services.")
-
-    def throttle_background_cpu(self) -> Tuple[bool, str]:
-        lowered = 0
-        allow = {"explorer.exe", "dwm.exe", "csrss.exe", "smss.exe", "system", "registry"}
-        try:
-            for p in psutil.process_iter(["name", "pid"]):
-                n = (p.info.get("name") or "").lower()
-                if not n or n in allow:
-                    continue
-                try:
-                    psutil.Process(p.info["pid"]).nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
-                    lowered += 1
-                except Exception:
-                    pass
-            return True, f"Lowered priority on ~{lowered} processes."
-        except Exception as e:
-            return False, str(e)
-
-    def list_heavy_processes(self) -> Tuple[bool, str]:
-        procs = []
-        for p in psutil.process_iter(["name", "pid", "cpu_percent", "memory_info"]):
-            try:
-                procs.append(
-                    (p.info["cpu_percent"], p.info["memory_info"].rss // (1024 * 1024), p.info["pid"], p.info["name"])
-                )
-            except Exception:
-                pass
-        procs.sort(reverse=True)
-        lines = [f"CPU {cpu:.1f}% | RAM {ram} MB | PID {pid} | {name}" for cpu, ram, pid, name in procs[:20]]
-        return True, "\n".join(lines) if lines else "No processes."
-
-    def driver_version_integrity(self) -> Tuple[bool, str]:
-        r = run_ps("(Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion | ConvertTo-Json)")
-        if r.returncode != 0 or not r.stdout.strip():
-            return False, r.stderr or r.stdout or "Failed to query GPU driver."
-        return True, r.stdout.strip()
-
-    def trim_ssds(self) -> Tuple[bool, str]:
-        return self.optimize_ssd_trim()
-
-    def defrag_hdds_safe(self) -> Tuple[bool, str]:
-        return self.optimize_hdd_defrag()
-
-    def analyze_disk_usage(self) -> Tuple[bool, str]:
-        r1 = run_ps("Get-Volume | Select-Object DriveLetter, FileSystem, SizeRemaining, Size | "
-                    "Format-Table -AutoSize | Out-String")
-        r2 = run_ps("Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free | "
-                    "Format-Table -AutoSize | Out-String")
-        out = (r1.stdout or r1.stderr or "") + "\n" + (r2.stdout or r2.stderr or "")
-        return True, out.strip()
-
-    def compact_winsxs(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        r = run_ps("DISM /Online /Cleanup-Image /StartComponentCleanup")
-        return (r.returncode == 0), (r.stdout or r.stderr or "WinSxS compact requested.")
-
-    def purge_prefetch_cache(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        pf = Path(r"C:\Windows\Prefetch")
-        removed = 0
-        if pf.exists():
-            for f in pf.glob("*.pf"):
-                try:
-                    f.unlink(missing_ok=True)
-                    removed += 1
-                except Exception:
-                    pass
-        return True, f"Removed {removed} prefetch entries."
-
-    def remove_windows_old(self) -> Tuple[bool, str]:
-        return self.cleanup_windows_old()
-
-    # Defaults & logs (unchanged)
-    def restore_defaults(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        msgs = []
-        run_ps("powercfg -setactive SCHEME_BALANCED"); msgs.append("Power plan -> Balanced")
-        for n in ["Ethernet", "Wi-Fi", "WiFi", "Local Area Connection"]:
-            run_ps(f'netsh interface ip set dns name="{n}" dhcp')
-        msgs.append("DNS -> DHCP (common adapters)")
-        run_ps('netsh int tcp set global autotuninglevel=normal'); msgs.append("TCP autotuning -> normal")
-        run_ps('netsh int tcp set global congestionprovider=none'); msgs.append("CTCP -> disabled")
-        self.toggle_nagle(False); msgs.append("Nagle -> enabled")
-
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\GameBar", 0, winreg.KEY_SET_VALUE) as k:
-                winreg.SetValueEx(k, "AllowAutoGameMode", 0, winreg.REG_DWORD, 1)
-            msgs.append("Game Mode -> ON")
-        except Exception:
-            msgs.append("Game Mode -> unchanged")
-
-        try:
-            path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as k:
-                winreg.SetValueEx(k, "VisualFXSetting", 0, winreg.REG_DWORD, 0)
-            msgs.append("Visual Effects -> default")
-        except Exception:
-            msgs.append("Visual Effects -> unchanged")
-
-        run_ps("Set-Service -Name SysMain -StartupType Automatic -ErrorAction SilentlyContinue")
-        run_ps("Set-Service -Name DiagTrack -StartupType Manual -ErrorAction SilentlyContinue")
-        msgs.append("Services -> defaults restored (SysMain/DiagTrack)")
-        return True, "Restored defaults:\n- " + "\n- ".join(msgs)
-
-    def export_logs_zip(self) -> Tuple[bool, str]:
-        export_dir = self.root / "exports"
-        export_dir.mkdir(parents=True, exist_ok=True)
-        out_zip = export_dir / "QrsTweaks_Logs.zip"
-        with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as z:
-            for p in self.logs_dir.glob("*.txt"):
-                z.write(p, arcname=p.name)
-        return True, f"Logs exported: {out_zip}"
-
-    def open_logs_folder(self) -> Tuple[bool, str]:
-        try:
-            os.startfile(self.logs_dir)
-            return True, f"Opened: {self.logs_dir}"
-        except Exception as e:
-            return False, str(e)
-
+    # ---------------- Gaming/Profile helpers ----------------
     def apply_default_game_tweaks(self) -> str:
         cmds = [
             'Set-ItemProperty -Path "HKCU:\\System\\GameConfigStore" -Name GameDVR_Enabled -Value 0',
@@ -747,3 +562,443 @@ foreach ($n in $names) {
         for c in cmds:
             run_ps(c)
         return "Reverted optimizations to default state."
+
+    # ---------------- Phase 3: System Optimization ----------------
+    def apply_system_tweaks(self) -> Tuple[bool, str]:
+        script = r"""
+$svcs = @('SysMain','DiagTrack','dmwappushsvc')
+foreach ($n in $svcs) {
+  $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
+  if ($svc) {
+    try {
+      Set-Service -Name $n -StartupType Disabled -ErrorAction SilentlyContinue
+      if ($svc.Status -eq 'Running') { Stop-Service -Name $n -Force -ErrorAction SilentlyContinue }
+    } catch {}
+  }
+}
+New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name 'AllowTelemetry' -Type DWord -Value 0
+New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Name 'Disabled' -Type DWord -Value 1
+New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsRunInBackground' -Type DWord -Value 2
+New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Type DWord -Value 2
+"""
+        if is_admin():
+            r = run_ps(script)
+            ok = (r.returncode == 0)
+            return ok, "Applied recommended system tweaks." if ok else (r.stderr or r.stdout or "Failed to apply tweaks.")
+        else:
+            ok = run_ps_elevated_blocking(script)
+            return ok, "Applied recommended system tweaks (elevated)." if ok else "Failed (UAC denied or script error)."
+
+    def revert_system_defaults(self) -> Tuple[bool, str]:
+        script = r"""
+$svcs = @('SysMain','DiagTrack','dmwappushsvc')
+foreach ($n in $svcs) {
+  $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
+  if ($svc) {
+    try {
+      $start = 'Automatic'
+      if ($n -eq 'DiagTrack') { $start = 'Manual' }
+      Set-Service -Name $n -StartupType $start -ErrorAction SilentlyContinue
+      if ($svc.Status -ne 'Running' -and $start -eq 'Automatic') { Start-Service -Name $n -ErrorAction SilentlyContinue }
+    } catch {}
+  }
+}
+New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name 'AllowTelemetry' -Type DWord -Value 3
+New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Name 'Disabled' -Type DWord -Value 0
+New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsRunInBackground' -Type DWord -Value 1
+New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Type DWord -Value 0
+"""
+        if is_admin():
+            r = run_ps(script)
+            ok = (r.returncode == 0)
+            return ok, "Restored default Windows settings." if ok else (r.stderr or r.stdout or "Failed to revert.")
+        else:
+            ok = run_ps_elevated_blocking(script)
+            return ok, "Restored default Windows settings (elevated)." if ok else "Failed (UAC denied or script error)."
+
+    def apply_gaming_mode(self) -> Tuple[bool, str]:
+        script = r"""
+powercfg -setactive SCHEME_MIN | Out-Null
+New-Item -Path 'HKCU:\System\GameConfigStore' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled' -Type DWord -Value 0
+New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' -Name 'AppCaptureEnabled' -Type DWord -Value 0
+New-Item -Path 'HKCU:\Software\Microsoft\GameBar' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'ShowStartupPanel' -Type DWord -Value 0
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'UseNexus' -Type DWord -Value 0
+netsh int tcp set global congestionprovider=ctcp | Out-Null
+netsh int tcp set global autotuninglevel=normal | Out-Null
+$svc = Get-Service -Name 'SysMain' -ErrorAction SilentlyContinue
+if ($svc) {
+  Set-Service -Name 'SysMain' -StartupType Disabled -ErrorAction SilentlyContinue
+  if ($svc.Status -eq 'Running') { Stop-Service -Name 'SysMain' -Force -ErrorAction SilentlyContinue }
+}
+"""
+        nagle_ok = True
+        if is_admin():
+            r = run_ps(script)
+            ok = (r.returncode == 0)
+            n_ok, _ = self.toggle_nagle(True)
+            nagle_ok = n_ok
+            return (ok and nagle_ok), "Gaming Mode applied."
+        else:
+            ok = run_ps_elevated_blocking(script)
+            if ok:
+                run_ps_elevated_blocking("Get-ChildItem 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces' | "
+                                         "ForEach-Object { New-ItemProperty -Path $_.PsPath -Name 'TcpNoDelay' -Value 1 -PropertyType DWord -Force; "
+                                         "New-ItemProperty -Path $_.PsPath -Name 'TcpAckFrequency' -Value 1 -PropertyType DWord -Force }")
+            return ok, "Gaming Mode applied (elevated)." if ok else "Failed to apply Gaming Mode."
+
+    def revert_normal_mode(self) -> Tuple[bool, str]:
+        script = r"""
+powercfg -setactive SCHEME_BALANCED | Out-Null
+New-Item -Path 'HKCU:\System\GameConfigStore' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled' -Type DWord -Value 1
+New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' -Name 'AppCaptureEnabled' -Type DWord -Value 1
+New-Item -Path 'HKCU:\Software\Microsoft\GameBar' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'ShowStartupPanel' -Type DWord -Value 1
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'UseNexus' -Type DWord -Value 1
+netsh int tcp set global congestionprovider=none | Out-Null
+netsh int tcp set global autotuninglevel=normal | Out-Null
+$svc = Get-Service -Name 'SysMain' -ErrorAction SilentlyContinue
+if ($svc) {
+  Set-Service -Name 'SysMain' -StartupType Automatic -ErrorAction SilentlyContinue
+  if ($svc.Status -ne 'Running') { Start-Service -Name 'SysMain' -ErrorAction SilentlyContinue }
+}
+"""
+        if is_admin():
+            r = run_ps(script)
+            ok = (r.returncode == 0)
+            self.toggle_nagle(False)
+            return ok, "Reverted to Normal Mode." if ok else (r.stderr or r.stdout or "Failed to revert.")
+        else:
+            ok = run_ps_elevated_blocking(script)
+            if ok:
+                run_ps_elevated_blocking("Get-ChildItem 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces' | "
+                                         "ForEach-Object { New-ItemProperty -Path $_.PsPath -Name 'TcpNoDelay' -Value 0 -PropertyType DWord -Force; "
+                                         "New-ItemProperty -Path $_.PsPath -Name 'TcpAckFrequency' -Value 0 -PropertyType DWord -Force }")
+            return ok, "Reverted to Normal Mode (elevated)." if ok else "Failed to revert."
+
+    # ======================================================================
+    # Phase 4: Startup & Background Services
+    # ======================================================================
+
+    # ---- Startup helpers ----
+    def _startup_keys(self):
+        return [
+            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"),
+            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Run"),
+        ]
+
+    def _disabled_key_path(self, base: str) -> str:
+        return base.replace("\\Run", "\\Run-Disabled-QrsTweaks")
+
+    def _ensure_key(self, root, path):
+        try:
+            winreg.CreateKey(root, path)
+        except Exception:
+            pass
+
+    def _startup_folders(self) -> List[Path]:
+        user_startup = Path(os.environ.get("APPDATA", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup"
+        common_startup = Path(os.environ.get("ProgramData", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup"
+        return [p for p in [user_startup, common_startup] if p and p.exists()]
+
+    def _disabled_startup_folder(self, startup_folder: Path) -> Path:
+        return startup_folder.parent / "Startup (Disabled by QrsTweaks)"
+
+    def _is_allowlisted(self, name: str, val: str) -> bool:
+        name_l = (name or "").lower()
+        val_l = (val or "").lower()
+        allow = [
+            "securityhealth", "defender", "msascui", "ctfmon",
+            "realtek", "nahimic", "audio", "sound", "rtk",
+            "nvidia", "nvbackend", "igfx", "intelgraphics", "amd", "radeon",
+        ]
+        return any(a in name_l or a in val_l for a in allow)
+
+    def list_startup_entries_detailed(self) -> Tuple[bool, str]:
+        lines = ["[Startup] Entries:"]
+        # Registry
+        for root, path in self._startup_keys():
+            try:
+                with winreg.OpenKey(root, path) as k:
+                    i = 0
+                    while True:
+                        try:
+                            name, val, _ = winreg.EnumValue(k, i); i += 1
+                            lines.append(f"  - REG  @{path} :: {name} => {val}")
+                        except OSError:
+                            break
+            except FileNotFoundError:
+                pass
+
+        # Startup folders
+        for folder in self._startup_folders():
+            try:
+                for item in folder.iterdir():
+                    if item.name.lower() == "desktop.ini":
+                        continue
+                    lines.append(f"  - FILE @{folder} :: {item.name} => {item}")
+            except Exception:
+                pass
+
+        if len(lines) == 1:
+            lines.append("  (none)")
+        return True, "\n".join(lines)
+
+    def disable_startup_auto(self) -> Tuple[bool, str]:
+        """Disable non-essential startup entries: move from Run -> Run-Disabled-QrsTweaks and move files."""
+        if not is_admin():
+            ok = run_ps_elevated_blocking("Write-Host 'elevating for startup changes'")
+            if not ok:
+                return False, "Admin required to disable startup entries."
+
+        moved = 0
+        # Registry: move values to disabled key if not allowlisted
+        for root, base in self._startup_keys():
+            disabled = self._disabled_key_path(base)
+            self._ensure_key(root, disabled)
+            try:
+                with winreg.OpenKey(root, base) as k:
+                    # collect first to avoid editing while enumerating
+                    entries = []
+                    i = 0
+                    while True:
+                        try:
+                            name, val, typ = winreg.EnumValue(k, i); i += 1
+                            entries.append((name, val, typ))
+                        except OSError:
+                            break
+            except FileNotFoundError:
+                entries = []
+
+            for name, val, typ in entries:
+                if self._is_allowlisted(name, val):
+                    continue
+                try:
+                    with winreg.OpenKey(root, disabled, 0, winreg.KEY_SET_VALUE) as kd:
+                        winreg.SetValueEx(kd, name, 0, typ, val)
+                    with winreg.OpenKey(root, base, 0, winreg.KEY_SET_VALUE) as kb:
+                        try:
+                            winreg.DeleteValue(kb, name)
+                        except FileNotFoundError:
+                            pass
+                    moved += 1
+                except Exception:
+                    pass
+
+        # Startup folders: move files to "Startup (Disabled by QrsTweaks)"
+        for folder in self._startup_folders():
+            disabled_folder = self._disabled_startup_folder(folder)
+            disabled_folder.mkdir(parents=True, exist_ok=True)
+            try:
+                for item in list(folder.iterdir()):
+                    if item.name.lower() == "desktop.ini":
+                        continue
+                    try:
+                        shutil.move(str(item), str(disabled_folder / item.name))
+                        moved += 1
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        return True, f"Disabled {moved} startup item(s)."
+
+    def enable_startup_disabled(self) -> Tuple[bool, str]:
+        """Re-enable items previously disabled by QrsTweaks."""
+        if not is_admin():
+            ok = run_ps_elevated_blocking("Write-Host 'elevating for startup changes'")
+            if not ok:
+                return False, "Admin required to enable startup entries."
+
+        restored = 0
+        # Registry: move values back from Run-Disabled-QrsTweaks -> Run
+        for root, base in self._startup_keys():
+            disabled = self._disabled_key_path(base)
+            try:
+                with winreg.OpenKey(root, disabled) as k:
+                    entries = []
+                    i = 0
+                    while True:
+                        try:
+                            name, val, typ = winreg.EnumValue(k, i); i += 1
+                            entries.append((name, val, typ))
+                        except OSError:
+                            break
+            except FileNotFoundError:
+                entries = []
+
+            for name, val, typ in entries:
+                try:
+                    with winreg.OpenKey(root, base, 0, winreg.KEY_SET_VALUE) as kb:
+                        winreg.SetValueEx(kb, name, 0, typ, val)
+                    with winreg.OpenKey(root, disabled, 0, winreg.KEY_SET_VALUE) as kd:
+                        try:
+                            winreg.DeleteValue(kd, name)
+                        except FileNotFoundError:
+                            pass
+                    restored += 1
+                except Exception:
+                    pass
+
+        # Startup folders: move files back
+        for folder in self._startup_folders():
+            disabled_folder = self._disabled_startup_folder(folder)
+            if not disabled_folder.exists():
+                continue
+            try:
+                for item in list(disabled_folder.iterdir()):
+                    try:
+                        shutil.move(str(item), str(folder / item.name))
+                        restored += 1
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        return True, f"Re-enabled {restored} startup item(s)."
+
+    def remove_startup_disabled(self) -> Tuple[bool, str]:
+        """Permanently delete items previously disabled by QrsTweaks (registry & files)."""
+        if not is_admin():
+            ok = run_ps_elevated_blocking("Write-Host 'elevating for startup changes'")
+            if not ok:
+                return False, "Admin required to remove startup entries."
+
+        removed = 0
+        # Registry: delete values under Run-Disabled-QrsTweaks
+        for root, base in self._startup_keys():
+            disabled = self._disabled_key_path(base)
+            try:
+                with winreg.OpenKey(root, disabled) as k:
+                    names = []
+                    i = 0
+                    while True:
+                        try:
+                            name, _, _ = winreg.EnumValue(k, i); i += 1
+                            names.append(name)
+                        except OSError:
+                            break
+            except FileNotFoundError:
+                names = []
+
+            for name in names:
+                try:
+                    with winreg.OpenKey(root, disabled, 0, winreg.KEY_SET_VALUE) as kd:
+                        winreg.DeleteValue(kd, name)
+                        removed += 1
+                except Exception:
+                    pass
+
+        # Startup folders: delete files in "Startup (Disabled by QrsTweaks)"
+        for folder in self._startup_folders():
+            disabled_folder = self._disabled_startup_folder(folder)
+            if not disabled_folder.exists():
+                continue
+            try:
+                for item in list(disabled_folder.iterdir()):
+                    try:
+                        if item.is_dir():
+                            shutil.rmtree(item, ignore_errors=True)
+                        else:
+                            item.unlink(missing_ok=True)
+                        removed += 1
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        return True, f"Permanently removed {removed} disabled startup item(s)."
+
+    # ---- Background Services ----
+    def list_heavy_services(self) -> Tuple[bool, str]:
+        """Return a summary of known heavy/optional services and their states."""
+        names = [
+            "SysMain", "WSearch", "DiagTrack", "dmwappushsvc",
+            "MapsBroker", "WMPNetworkSvc", "WerSvc"
+        ]
+        ps = (
+            "$n=@('SysMain','WSearch','DiagTrack','dmwappushsvc','MapsBroker','WMPNetworkSvc','WerSvc');"
+            "Get-Service -Name $n -ErrorAction SilentlyContinue | "
+            "Select-Object Name,Status,StartType | ConvertTo-Json"
+        )
+        r = run_ps(ps)
+        lines = ["[Services] Heavy/Optional services:"]
+        if r.returncode == 0 and r.stdout.strip():
+            try:
+                data = json.loads(r.stdout)
+                if isinstance(data, dict):
+                    data = [data]
+                for d in data:
+                    lines.append(f"  - {d.get('Name')} | {d.get('Status')} | {d.get('StartType')}")
+            except Exception:
+                lines.append("  (Unable to parse service info.)")
+        else:
+            lines.append("  (No data)")
+        return True, "\n".join(lines)
+
+    def disable_non_essential_services(self) -> Tuple[bool, str]:
+        """Disable + stop a curated set of non-essential services (safe default list)."""
+        script = r"""
+$n = @('SysMain','WSearch','DiagTrack','dmwappushsvc','MapsBroker','WMPNetworkSvc','WerSvc')
+foreach ($svc in $n) {
+  $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
+  if ($s) {
+    try {
+      Set-Service -Name $svc -StartupType Disabled -ErrorAction SilentlyContinue
+      if ($s.Status -eq 'Running') { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue }
+    } catch {}
+  }
+}
+"""
+        if is_admin():
+            r = run_ps(script)
+            ok = (r.returncode == 0)
+            return ok, "Disabled non-essential services." if ok else (r.stderr or r.stdout or "Failed to disable services.")
+        else:
+            ok = run_ps_elevated_blocking(script)
+            return ok, "Disabled non-essential services (elevated)." if ok else "Failed (UAC denied)."
+
+    def restore_default_services(self) -> Tuple[bool, str]:
+        """Restore default-ish startup types for the curated list."""
+        # Approximate defaults: SysMain Auto, WSearch Auto, DiagTrack Manual, dmwappushsvc Manual,
+        # MapsBroker Manual, WMPNetworkSvc Manual, WerSvc Manual
+        script = r"""
+$defaults = @{
+  'SysMain'='Automatic'
+  'WSearch'='Automatic'
+  'DiagTrack'='Manual'
+  'dmwappushsvc'='Manual'
+  'MapsBroker'='Manual'
+  'WMPNetworkSvc'='Manual'
+  'WerSvc'='Manual'
+}
+foreach ($pair in $defaults.GetEnumerator()) {
+  $n = $pair.Key; $t = $pair.Value
+  $s = Get-Service -Name $n -ErrorAction SilentlyContinue
+  if ($s) {
+    try {
+      Set-Service -Name $n -StartupType $t -ErrorAction SilentlyContinue
+      if ($t -eq 'Automatic' -and $s.Status -ne 'Running') { Start-Service -Name $n -ErrorAction SilentlyContinue }
+    } catch {}
+  }
+}
+"""
+        if is_admin():
+            r = run_ps(script)
+            ok = (r.returncode == 0)
+            return ok, "Restored default service startup types." if ok else (r.stderr or r.stdout or "Failed to restore defaults.")
+        else:
+            ok = run_ps_elevated_blocking(script)
+            return ok, "Restored default service startup types (elevated)." if ok else "Failed (UAC denied)."
