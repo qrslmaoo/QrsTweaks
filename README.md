@@ -106,16 +106,23 @@ Automated builds and one-click installers are in development.
 Contributions are welcome and encouraged!
 
 Fork the repository
+
 Create a feature branch (git checkout -b feature/amazing-thing)
+
 Commit your changes (git commit -m 'Add amazing thing')
+
 Push to the branch (git push origin feature/amazing-thing)
+
 Open a Pull Request
 
 Please update tests and documentation as appropriate.
+
 Code Style
 
 PEP 8 compliant
+
 Type hints recommended
+
 Clear, descriptive commit messages
 
 
