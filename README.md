@@ -68,23 +68,27 @@ Built with **Python** and **PySide6** – 100% offline, no APIs, no telemetry.
 ### Installation from Source
 
 git clone https://github.com/qrslmaoo/QrsTweaks.git
+
 cd QrsTweaks
+
 python -m venv .venv
+
 .venv\Scripts\activate
+
 pip install -r requirements.txt
+
 python app/main.py
-Building a Standalone Executable (Optional)
-bashpip install pyinstaller
-pyinstaller --onefile --windowed --icon=assets/icon.ico app/main.py
-The executable will be created in the dist/ folder.
 
 ##  Development
 bash# Clone and set up
+
 git clone https://github.com/qrslmaoo/QrsTweaks.git
+
 cd QrsTweaks
 
 # Create virtual environment
 python -m venv .venv
+
 .venv\Scripts\activate
 
 # Install dependencies
