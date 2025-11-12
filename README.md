@@ -1,6 +1,6 @@
 # QrsTweaks (Python + PySide6)
 
-Local-first suite (no APIs):
+Local Windows Optimizer (no APIs):
 - Windows Optimizer
 - Game Optimizer
 - Password Manager
