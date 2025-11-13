@@ -1,175 +1,108 @@
+from __future__ import annotations
+
 """
 src/qrs/modules/game_optim.py
 
-Backend logic for per-game optimization, starting with:
-- Global "gaming" tweaks (Game Bar / DVR / FSO / low latency)
-- GPU scheduling
-- Basic Nvidia / AMD / Intel detection (via WMI / registry)
-- Fortnite-specific cache cleanup (shader + logs)
-- DirectX cache cleanup
+Backend logic for per-game optimization.
 
-All methods are defensive:
-- They never raise exceptions to the caller.
-- They return (ok: bool, message: str) for logging in the UI.
+This module focuses on *game-scoped* tweaks and cleanups, separate from the
+global Windows optimizer. It currently includes:
 
-NO AI, NO monitoring, NO background services.
-Everything is on-demand, one-shot tweaks.
+- Xbox Game Bar / Game DVR toggles (for reducing recording overhead)
+- Fortnite-specific cache + log cleanup
+- DirectX shader cache cleanup
+- Process detection engine (Phase 4A)
+- Per-game CPU priority & CPU affinity helpers (Phase 4B)
+
+Everything here is designed to be **safe by default**:
+- Only touches known game directories or well-known cache locations
+- Fails gracefully on non-Windows systems
 """
-
-from __future__ import annotations
 
 import os
 import shutil
 import subprocess
-import sys
-from dataclasses import dataclass
+import platform
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Dict, NamedTuple, List
+
+try:
+    import psutil  # type: ignore
+except ImportError:  # pragma: no cover - optional
+    psutil = None
 
 
-# ------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------
-
-def _run_reg_add(
-    key: str,
-    name: str,
-    data_type: str,
-    value: str,
-) -> Tuple[bool, str]:
-    """
-    Run a 'reg add' safely. Returns (ok, message).
-    data_type e.g. REG_DWORD, REG_SZ.
-    """
-    try:
-        cmd = [
-            "reg",
-            "add",
-            key,
-            "/v",
-            name,
-            "/t",
-            data_type,
-            "/d",
-            str(value),
-            "/f",
-        ]
-        cp = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            shell=False,
-        )
-        if cp.returncode == 0:
-            return True, f"Registry set: {key}\\{name} = {value} ({data_type})"
-        return False, f"Failed to set registry {key}\\{name}: {cp.stderr.strip()}"
-    except FileNotFoundError:
-        return False, "reg.exe not found (non-Windows or restricted environment)."
-    except Exception as e:
-        return False, f"Registry operation error: {e}"
-
-
-def _delete_dir_safe(path: Path) -> Tuple[bool, str]:
-    """
-    Delete a directory tree if it exists. Returns (ok, message).
-    NEVER throws to caller.
-    """
-    try:
-        if not path.exists():
-            return True, f"{path} does not exist (nothing to delete)."
-        shutil.rmtree(path, ignore_errors=True)
-        return True, f"Deleted directory: {path}"
-    except Exception as e:
-        return False, f"Error deleting {path}: {e}"
+class ProcessInfo(NamedTuple):
+    pid: int
+    name: str
 
 
 def _is_windows() -> bool:
-    return sys.platform.startswith("win32") or sys.platform.startswith("cygwin")
+    return platform.system() == "Windows"
 
 
-# ------------------------------------------------------------
-# GPU detection (very lightweight)
-# ------------------------------------------------------------
-
-@dataclass
-class GpuInfo:
-    vendor: str  # "nvidia", "amd", "intel", "unknown"
-    raw: str
-
-
-def _detect_gpu_vendor() -> GpuInfo:
+def _run_shell(cmd: str) -> Tuple[bool, str]:
     """
-    Very lightweight GPU vendor detection.
-    - Uses 'wmic path win32_VideoController get Name' if available.
-    - Never crashes; falls back to "unknown".
+    Run a command through the shell and return (ok, combined_output).
+    Never raises, always returns a string.
     """
-    if not _is_windows():
-        return GpuInfo(vendor="unknown", raw="non-windows")
-
     try:
         cp = subprocess.run(
-            ["wmic", "path", "win32_VideoController", "get", "Name"],
+            cmd,
+            shell=True,
             capture_output=True,
             text=True,
-            shell=False,
         )
-        if cp.returncode != 0:
-            return GpuInfo(vendor="unknown", raw=cp.stderr.strip() or cp.stdout.strip())
-        text = (cp.stdout or "").lower()
-        vendor = "unknown"
-        if "nvidia" in text:
-            vendor = "nvidia"
-        elif "advanced micro devices" in text or "amd" in text or "radeon" in text:
-            vendor = "amd"
-        elif "intel" in text:
-            vendor = "intel"
-        return GpuInfo(vendor=vendor, raw=cp.stdout.strip())
-    except Exception as e:
-        return GpuInfo(vendor="unknown", raw=str(e))
+        out = (cp.stdout or "") + (cp.stderr or "")
+        out = out.strip()
+        return (cp.returncode == 0, out or f"(exit {cp.returncode})")
+    except Exception as e:  # pragma: no cover - extremely defensive
+        return False, f"Exception while running command: {e!r}"
 
-
-# ------------------------------------------------------------
-# Game Optimizer
-# ------------------------------------------------------------
 
 class GameOptimizer:
     """
-    Core logic class for game-level optimizations.
+    Core logic class for per-game optimizations.
 
-    Constructor is intentionally minimal; profiles/logging/controllers
-    are expected to be handled elsewhere.
+    UI integration:
+      - app/pages/games_page.py instantiates this and calls methods like:
+            disable_xbox_game_bar()
+            disable_game_dvr()
+            clean_fortnite_shader_cache()
+            clean_fortnite_logs_and_crashes()
+            clean_directx_cache()
+            apply_game_priority(...)
+            apply_game_affinity_recommended(...)
+            apply_game_affinity_all_cores(...)
     """
 
-    def __init__(self):
-        self.gpu_info: GpuInfo = _detect_gpu_vendor()
-
-    # ============================================================
-    #   GLOBAL GAMING TWEAKS (Game Bar / DVR / FSO / low latency)
-    # ============================================================
+    # =========================================================
+    #   XBOX GAME BAR / DVR
+    # =========================================================
 
     def disable_xbox_game_bar(self) -> Tuple[bool, str]:
         """
-        Disable Xbox Game Bar overlay and capture.
+        Disable Xbox Game Bar overlay and capture via registry toggles.
+        Works only on Windows; otherwise returns (False, reason).
         """
         if not _is_windows():
             return False, "Not running on Windows; cannot tweak Game Bar."
 
-        ok1, m1 = _run_reg_add(
-            r"HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR",
-            "AppCaptureEnabled",
-            "REG_DWORD",
-            "0",
-        )
-        ok2, m2 = _run_reg_add(
-            r"HKCU\System\GameConfigStore",
-            "GameDVR_Enabled",
-            "REG_DWORD",
-            "0",
-        )
+        cmds = [
+            # Turn off Game Bar UI
+            r'reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 0 /f',
+            r'reg add "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f',
+        ]
 
-        ok = ok1 and ok2
-        msg = "; ".join([m1, m2])
-        return ok, f"[Game Bar] {msg}"
+        logs = []
+        ok_all = True
+        for c in cmds:
+            ok, out = _run_shell(c)
+            ok_all = ok_all and ok
+            logs.append(f"$ {c}\n{out}")
+
+        msg = "Xbox Game Bar disabled.\n" + "\n\n".join(logs)
+        return ok_all, msg
 
     def disable_game_dvr(self) -> Tuple[bool, str]:
         """
@@ -178,238 +111,502 @@ class GameOptimizer:
         if not _is_windows():
             return False, "Not running on Windows; cannot tweak Game DVR."
 
-        ok1, m1 = _run_reg_add(
-            r"HKCU\System\GameConfigStore",
-            "GameDVR_DSEBehavior",
-            "REG_DWORD",
-            "2",
-        )
-        ok2, m2 = _run_reg_add(
-            r"HKCU\System\GameConfigStore",
-            "AllowGameDVR",
-            "REG_DWORD",
-            "0",
-        )
-        ok = ok1 and ok2
-        msg = "; ".join([m1, m2])
-        return ok, f"[Game DVR] {msg}"
+        cmds = [
+            # DSE behavior & AllowGameDVR flags
+            r'reg add "HKCU\System\GameConfigStore" /v GameDVR_DSEBehavior /t REG_DWORD /d 2 /f',
+            r'reg add "HKCU\System\GameConfigStore" /v AllowGameDVR /t REG_DWORD /d 0 /f',
+        ]
 
-    def disable_fullscreen_optimizations(self) -> Tuple[bool, str]:
-        """
-        Disable Fullscreen Optimizations globally.
-        This reduces some input lag and odd frame pacing.
-        """
-        if not _is_windows():
-            return False, "Not running on Windows; cannot tweak FSO."
-
-        ok, msg = _run_reg_add(
-            r"HKCU\System\GameConfigStore",
-            "GameDVR_FSEBehaviorMode",
-            "REG_DWORD",
-            "2",
-        )
-        return ok, f"[Fullscreen Optimizations] {msg}"
-
-    def apply_low_latency_preset(self) -> Tuple[bool, str]:
-        """
-        Apply a low-latency preset:
-        - Ensure DVR off
-        - Ensure GameDVR not allowed
-        - Sets FFXBuffering to 1 (low latency frame pacing)
-        """
-        if not _is_windows():
-            return False, "Not running on Windows; cannot apply latency preset."
-
-        msgs = []
+        logs = []
         ok_all = True
+        for c in cmds:
+            ok, out = _run_shell(c)
+            ok_all = ok_all and ok
+            logs.append(f"$ {c}\n{out}")
 
-        # Reuse DVR disable function
-        ok, msg = self.disable_game_dvr()
-        msgs.append(msg)
-        ok_all = ok_all and ok
+        msg = "Game DVR disabled.\n" + "\n\n".join(logs)
+        return ok_all, msg
 
-        # FFXBuffering: 1 = low latency mode
-        ok2, m2 = _run_reg_add(
-            r"HKCU\System\GameConfigStore",
-            "FFXBuffering",
-            "REG_DWORD",
-            "1",
-        )
-        ok_all = ok_all and ok2
-        msgs.append(m2)
-
-        return ok_all, "[Low Latency Preset] " + "; ".join(msgs)
-
-    # ============================================================
-    #   GPU SCHEDULING / PERFORMANCE
-    # ============================================================
-
-    def enable_gpu_scheduling(self) -> Tuple[bool, str]:
-        """
-        Enable Hardware-accelerated GPU scheduling:
-        HwSchMode = 2 under GraphicsDrivers.
-        """
-        if not _is_windows():
-            return False, "Not running on Windows; cannot tweak GPU scheduling."
-
-        ok, msg = _run_reg_add(
-            r"HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers",
-            "HwSchMode",
-            "REG_DWORD",
-            "2",
-        )
-        return ok, f"[GPU Scheduling] {msg}"
-
-    def apply_nvidia_max_performance_hint(self) -> Tuple[bool, str]:
-        """
-        Very light Nvidia hint: this does NOT use NVAPI and does NOT
-        attempt to modify driver profiles directly.
-
-        Instead, it writes a safe REG value that some Nvidia builds
-        respect as a default power policy hint. If GPU is not Nvidia,
-        this becomes a no-op message.
-        """
-        if self.gpu_info.vendor != "nvidia":
-            return True, "[Nvidia] GPU is not Nvidia; nothing to apply."
-
-        if not _is_windows():
-            return False, "Not running on Windows; cannot tweak Nvidia hints."
-
-        # Some Nvidia drivers read this as a global perf hint
-        key = r"HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global"
-        ok, msg = _run_reg_add(
-            key,
-            "PerfLevelSrc",
-            "REG_DWORD",
-            "3322",  # common 'prefer max performance' hint
-        )
-        return ok, f"[Nvidia Max Performance] {msg}"
-
-    # ============================================================
+    # =========================================================
     #   FORTNITE-SPECIFIC CLEANUPS
-    # ============================================================
+    # =========================================================
 
-    def _local_appdata(self) -> Optional[Path]:
-        lad = os.getenv("LOCALAPPDATA")
-        return Path(lad) if lad else None
+    def _fortnite_paths(self) -> Dict[str, Path]:
+        """
+        Returns key paths used for Fortnite cleanup, rooted under:
+            %LOCALAPPDATA%/FortniteGame/Saved
 
-    def fortnite_paths(self) -> dict:
+        Keys:
+            base      -> Saved root
+            logs      -> Saved/Logs
+            crashes   -> Saved/Crashes
+            shaders   -> Saved/ShaderCaches (approximate)
         """
-        Returns key paths used for Fortnite cleanup.
-        """
-        lad = self._local_appdata()
+        lad = os.environ.get("LOCALAPPDATA")
         if not lad:
-            return {}
+            # Return placeholders that clearly show the environment issue
+            dummy = Path("LOCALAPPDATA_NOT_SET")
+            return {
+                "base": dummy,
+                "logs": dummy / "Logs",
+                "crashes": dummy / "Crashes",
+                "shaders": dummy / "ShaderCaches",
+            }
 
-        base = lad / "FortniteGame" / "Saved"
+        base = Path(lad) / "FortniteGame" / "Saved"
         return {
-            "shader_cache": base / "ShaderCache",
+            "base": base,
             "logs": base / "Logs",
             "crashes": base / "Crashes",
-            "config_backup": base / "Config_Backup_QrsTweaks",
+            "shaders": base / "ShaderCaches",
         }
+
+    def _delete_dir_contents(self, p: Path) -> int:
+        """
+        Delete direct children of directory `p` (files + subdirs).
+        Does NOT delete `p` itself.
+
+        Returns approximate number of items removed.
+        """
+        if not p.exists() or not p.is_dir():
+            return 0
+
+        count = 0
+        for child in p.iterdir():
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    if child.exists():
+                        child.unlink()
+                count += 1
+            except Exception:
+                # Best-effort only; permission issues are ignored
+                continue
+        return count
 
     def clean_fortnite_shader_cache(self) -> Tuple[bool, str]:
         """
-        Delete Fortnite shader cache directory.
+        Clean Fortnite shader / pipeline caches under:
+            %LOCALAPPDATA%/FortniteGame/Saved/ShaderCaches
         """
-        paths = self.fortnite_paths()
-        if not paths:
-            return False, "LOCALAPPDATA not found; cannot locate Fortnite shader cache."
+        paths = self._fortnite_paths()
+        shaders = paths["shaders"]
 
-        ok, msg = _delete_dir_safe(paths["shader_cache"])
-        return ok, f"[Fortnite Shader Cache] {msg}"
+        removed = self._delete_dir_contents(shaders)
+        if removed == 0:
+            return False, f"No shader cache entries removed (directory missing or empty: {shaders})"
+
+        return True, f"Removed ~{removed} Fortnite shader cache entries from {shaders}"
 
     def clean_fortnite_logs_and_crashes(self) -> Tuple[bool, str]:
         """
-        Delete Fortnite logs and crash dumps.
+        Delete Fortnite logs and crash dumps under:
+            %LOCALAPPDATA%/FortniteGame/Saved/Logs
+            %LOCALAPPDATA%/FortniteGame/Saved/Crashes
         """
-        paths = self.fortnite_paths()
-        if not paths:
-            return False, "LOCALAPPDATA not found; cannot locate Fortnite logs."
+        paths = self._fortnite_paths()
+        logs_dir = paths["logs"]
+        crash_dir = paths["crashes"]
 
-        msgs = []
-        ok_all = True
+        removed_logs = self._delete_dir_contents(logs_dir)
+        removed_crashes = self._delete_dir_contents(crash_dir)
 
-        for key in ("logs", "crashes"):
-            ok, msg = _delete_dir_safe(paths[key])
-            ok_all = ok_all and ok
-            msgs.append(msg)
+        ok = (removed_logs + removed_crashes) > 0
+        msg = (
+            f"Fortnite logs removed: ~{removed_logs} from {logs_dir}\n"
+            f"Fortnite crashes removed: ~{removed_crashes} from {crash_dir}"
+        )
+        return ok, msg
 
-        return ok_all, "[Fortnite Logs/Crashes] " + "; ".join(msgs)
-
-    # ============================================================
-    #   DIRECTX / GLOBAL SHADER CACHES
-    # ============================================================
+    # =========================================================
+    #   DIRECTX CACHE CLEANUP
+    # =========================================================
 
     def clean_directx_cache(self) -> Tuple[bool, str]:
         """
-        Clean DirectX cache under LOCALAPPDATA\\D3DSCache and other safe dirs.
+        Clean DirectX cache under LOCALAPPDATA\\D3DSCache and a few
+        other known, safe locations.
+
+        This is a *global* graphics cache, but games like Fortnite can
+        benefit from periodically clearing it.
         """
-        lad = self._local_appdata()
+        if not _is_windows():
+            return False, "Not running on Windows; cannot clean DirectX cache."
+
+        lad = os.environ.get("LOCALAPPDATA")
         if not lad:
             return False, "LOCALAPPDATA not found; cannot clean DirectX cache."
 
-        dx_cache = lad / "D3DSCache"
-        ok, msg = _delete_dir_safe(dx_cache)
-        return ok, f"[DirectX Cache] {msg}"
+        base = Path(lad)
+        # Focus on the standard D3DSCache directory. We avoid touching
+        # obscure GPU-driver-specific directories here on purpose.
+        targets = [
+            base / "D3DSCache",
+        ]
 
-    # ============================================================
-    #   HIGH-LEVEL PACKS
-    # ============================================================
+        total_removed = 0
+        details: List[str] = []
 
-    def apply_fortnite_optimization_pack(self) -> Tuple[bool, str]:
+        for t in targets:
+            removed = self._delete_dir_contents(t)
+            total_removed += removed
+            details.append(f"{t} -> ~{removed} entries removed.")
+
+        ok = total_removed > 0
+        msg = "DirectX cache cleanup complete.\n" + "\n".join(details)
+        return ok, msg
+
+    # =========================================================
+    #   COMPOSED PRESET EXAMPLE (FORTNITE "GAMING" PRESET)
+    # =========================================================
+
+    def apply_fortnite_gaming_preset(self) -> Tuple[bool, str]:
         """
-        High-level pack called from the UI:
-        - Disable Game Bar
-        - Disable DVR
-        - Disable FSO
-        - Apply low latency preset
-        - Enable GPU scheduling
-        - (If Nvidia) apply perf hint
-        - Clean Fortnite shader cache
-        - Clean Fortnite logs/crashes
-        - Clean DirectX cache
+        Example helper that wires together:
+          - Disable Game Bar
+          - Disable Game DVR
+          - Clean Fortnite shader cache
+          - Clean Fortnite logs/crashes
+          - Clean DirectX cache
         """
-        if not _is_windows():
-            return False, "Not running on Windows; Fortnite pack only supports Windows."
+        steps: List[Tuple[str, bool, str]] = []
 
-        results = []
+        ok_gb, msg_gb = self.disable_xbox_game_bar()
+        steps.append(("Game Bar", ok_gb, msg_gb))
 
-        # Game Bar, DVR, FSO, latency
-        for func in (
-            self.disable_xbox_game_bar,
-            self.disable_game_dvr,
-            self.disable_fullscreen_optimizations,
-            self.apply_low_latency_preset,
-        ):
-            ok, msg = func()
-            results.append(msg)
+        ok_dvr, msg_dvr = self.disable_game_dvr()
+        steps.append(("Game DVR", ok_dvr, msg_dvr))
 
-        # GPU scheduling + Nvidia perf
-        ok_gpu, msg_gpu = self.enable_gpu_scheduling()
-        results.append(msg_gpu)
-
-        ok_nv, msg_nv = self.apply_nvidia_max_performance_hint()
-        results.append(msg_nv)
-
-        # Fortnite cache cleanups
         ok_sh, msg_sh = self.clean_fortnite_shader_cache()
-        results.append(msg_sh)
+        steps.append(("Shader Cache", ok_sh, msg_sh))
 
         ok_logs, msg_logs = self.clean_fortnite_logs_and_crashes()
-        results.append(msg_logs)
+        steps.append(("Logs/Crashes", ok_logs, msg_logs))
 
-        # DirectX cache
         ok_dx, msg_dx = self.clean_directx_cache()
-        results.append(msg_dx)
+        steps.append(("DirectX Cache", ok_dx, msg_dx))
 
-        ok_all = all([
-            ok_gpu,
-            ok_nv,
-            ok_sh,
-            ok_logs,
-            ok_dx,
-        ])
+        ok_all = all(s[1] for s in steps)
+        lines = []
+        for label, ok, msg in steps:
+            state = "OK" if ok else "WARN"
+            lines.append(f"[{state}] {label}: {msg}")
 
-        return ok_all, "\n".join(results)
+        return ok_all, "\n".join(lines)
+
+    # =========================================================
+    #   PROCESS DETECTION ENGINE (Phase 4A)
+    # =========================================================
+    #
+    # This layer is used by:
+    #   - Per-game CPU priority tweaks
+    #   - Per-game Nagle / latency presets
+    #   - Any "while game is running" features
+    #
+    # It does NOT auto-scan or permanently monitor anything;
+    # it only looks for processes when explicitly called.
+
+    def _game_to_process_names(self, game_label: str) -> list[str]:
+        """
+        Map a friendly game label (from the UI combo) to one or more
+        plausible process names.
+
+        The labels are defined in app/pages/games_page.py:
+            "Fortnite", "Minecraft", "Valorant", "Call of Duty", "Custom Game…"
+        """
+        label = (game_label or "").strip().lower()
+
+        if label.startswith("fortnite"):
+            return ["FortniteClient-Win64-Shipping.exe"]
+        if label.startswith("minecraft"):
+            # Java + Windows edition
+            return ["javaw.exe", "Minecraft.Windows.exe"]
+        if label.startswith("valorant"):
+            return ["VALORANT-Win64-Shipping.exe"]
+        if label.startswith("call of duty") or label.startswith("cod"):
+            # CoD has many variants; keep it generic for now
+            return [
+                "cod.exe",
+                "cod16.exe",
+                "cod17.exe",
+                "cod18.exe",
+                "modernwarfare.exe",
+                "mw2.exe",
+                "mw3.exe",
+            ]
+        # Custom game: we don't guess; UI can later prompt for name
+        return []
+
+    def _is_psutil_ready(self) -> Tuple[bool, str]:
+        """
+        Small guard to avoid hard-crashing when psutil is missing or
+        platform is not supported.
+        """
+        if not _is_windows():
+            return False, "Process detection is only supported on Windows."
+        if psutil is None:
+            return False, "psutil is not installed; install with `pip install psutil`."
+        return True, ""
+
+    def _iter_candidate_processes(self, names: list[str]) -> list[ProcessInfo]:
+        """
+        Return a list of matching processes for any of the given exe names.
+        Chooses by comparing case-insensitive process.name().
+        """
+        ok, _ = self._is_psutil_ready()
+        if not ok or not names:
+            return []
+
+        wanted = {n.lower() for n in names}
+        found: list[ProcessInfo] = []
+
+        try:
+            for p in psutil.process_iter(["pid", "name"]):  # type: ignore[attr-defined]
+                try:
+                    name = (p.info.get("name") or "").strip()
+                    if not name:
+                        continue
+                    if name.lower() in wanted:
+                        found.append(ProcessInfo(pid=p.info["pid"], name=name))
+                except (psutil.NoSuchProcess, psutil.AccessDenied):  # type: ignore[attr-defined]
+                    continue
+        except Exception:
+            # Anything weird from psutil, just treat as "no processes"
+            return []
+
+        return found
+
+    def find_game_process(
+        self,
+        game_label: str,
+        timeout_sec: float = 0.0,
+        poll_interval: float = 1.0,
+    ) -> Tuple[bool, str, ProcessInfo | None]:
+        """
+        Core entry for the rest of the optimizer.
+
+        Args:
+            game_label: Text shown in the Game combobox
+            timeout_sec: How long to wait for the game to appear
+                         0 = no waiting, just one scan
+            poll_interval: How often to recheck while waiting
+
+        Returns:
+            (ok, message, ProcessInfo or None)
+
+        Examples of 'ok':
+            True,  "Found FortniteClient-Win64-Shipping.exe (PID 1234)", ProcessInfo(...)
+            False, "No matching process found for Fortnite", None
+        """
+        ok, msg = self._is_psutil_ready()
+        if not ok:
+            return False, msg, None
+
+        target_names = self._game_to_process_names(game_label)
+        if not target_names:
+            return False, f"No known process mapping for '{game_label}'.", None
+
+        import time as _time
+
+        deadline = _time.time() + max(timeout_sec, 0.0)
+        attempt = 0
+
+        while True:
+            attempt += 1
+            matches = self._iter_candidate_processes(target_names)
+            if matches:
+                # Prefer the one with the highest memory usage if we can
+                best = matches[0]
+                try:
+                    if psutil is not None:
+                        best_proc = max(
+                            (psutil.Process(m.pid) for m in matches),  # type: ignore[attr-defined]
+                            key=lambda p: p.memory_info().rss,
+                        )
+                        best = ProcessInfo(pid=best_proc.pid, name=best_proc.name())
+                except Exception:
+                    best = matches[0]
+
+                return (
+                    True,
+                    f"Found {best.name} (PID {best.pid}) after {attempt} scan(s).",
+                    best,
+                )
+
+            if _time.time() >= deadline or timeout_sec <= 0:
+                pretty = ", ".join(target_names)
+                return False, f"No running process found for {game_label} ({pretty}).", None
+
+            _time.sleep(max(poll_interval, 0.1))
+
+    def wait_for_game(
+        self,
+        game_label: str,
+        timeout_sec: float = 30.0,
+    ) -> Tuple[bool, str, ProcessInfo | None]:
+        """
+        High-level helper: wait up to timeout_sec for the game to appear.
+
+        Intended use:
+            ok, msg, proc = self.wait_for_game("Fortnite", timeout_sec=60)
+            if ok:
+                # bump priority, tweak network, etc.
+        """
+        return self.find_game_process(
+            game_label=game_label,
+            timeout_sec=timeout_sec,
+            poll_interval=1.0,
+        )
+
+    def get_game_pid_or_none(self, game_label: str) -> int | None:
+        """
+        Single-shot: return a PID for the selected game if it's running,
+        or None if not.
+
+        No waiting, no retries.
+        """
+        ok, _, proc = self.find_game_process(
+            game_label=game_label,
+            timeout_sec=0.0,
+            poll_interval=0.5,
+        )
+        return proc.pid if ok and proc is not None else None
+
+    # =========================================================
+    #   CPU PRIORITY & AFFINITY (Phase 4B)
+    # =========================================================
+
+    def set_process_priority(self, pid: int, level: str) -> Tuple[bool, str]:
+        """
+        Set priority of a process by PID using psutil.
+
+        Levels (case-insensitive):
+            "HIGH"
+            "ABOVE_NORMAL"
+            "NORMAL" (fallback)
+        """
+        ok, msg = self._is_psutil_ready()
+        if not ok:
+            return False, msg
+        if not _is_windows():
+            return False, "CPU priority changes are only supported on Windows."
+
+        assert psutil is not None  # for type checkers
+        try:
+            proc = psutil.Process(pid)  # type: ignore[attr-defined]
+            lvl = (level or "").upper()
+
+            if lvl == "HIGH":
+                priority = psutil.HIGH_PRIORITY_CLASS  # type: ignore[attr-defined]
+            elif lvl in ("ABOVE_NORMAL", "ABOVE"):
+                priority = psutil.ABOVE_NORMAL_PRIORITY_CLASS  # type: ignore[attr-defined]
+            else:
+                priority = psutil.NORMAL_PRIORITY_CLASS  # type: ignore[attr-defined]
+
+            proc.nice(priority)  # type: ignore[arg-type]
+            return True, f"Priority set to {lvl} for PID {pid}."
+        except Exception as e:
+            return False, f"Failed to set priority for PID {pid}: {e!r}"
+
+    def apply_game_priority(self, game_label: str, level: str) -> Tuple[bool, str]:
+        """
+        Resolve game → PID, then apply process priority.
+        """
+        pid = self.get_game_pid_or_none(game_label)
+        if pid is None:
+            return False, f"No running process found for '{game_label}'. Launch the game first."
+
+        ok, msg = self.set_process_priority(pid, level)
+        if ok:
+            return True, f"{msg} (game='{game_label}')"
+        return False, msg
+
+    def _recommended_gaming_cores(self) -> List[int]:
+        """
+        Compute a 'recommended' gaming core set.
+
+        Strategy:
+          - Use up to the first 8 logical cores.
+          - If fewer than 8 cores exist, use all.
+        """
+        ok, _ = self._is_psutil_ready()
+        if not ok or psutil is None:
+            return []
+
+        try:
+            total = psutil.cpu_count(logical=True) or 0  # type: ignore[attr-defined]
+        except Exception:
+            total = 0
+
+        if total <= 0:
+            return []
+
+        use = min(8, total)
+        return list(range(use))
+
+    def set_cpu_affinity(self, pid: int, cores: List[int]) -> Tuple[bool, str]:
+        """
+        Apply CPU affinity to a PID using psutil.
+
+        cores: list of logical CPU indices, e.g. [0,1,2,3].
+        """
+        ok, msg = self._is_psutil_ready()
+        if not ok:
+            return False, msg
+        if not _is_windows():
+            return False, "CPU affinity tweaks are only supported on Windows."
+
+        if not cores:
+            return False, "No cores specified for affinity."
+
+        assert psutil is not None  # for type checkers
+        try:
+            proc = psutil.Process(pid)  # type: ignore[attr-defined]
+            proc.cpu_affinity(cores)    # type: ignore[attr-defined]
+            return True, f"Affinity set to cores={cores} for PID {pid}."
+        except Exception as e:
+            return False, f"Failed to set CPU affinity for PID {pid}: {e!r}"
+
+    def apply_game_affinity_recommended(self, game_label: str) -> Tuple[bool, str]:
+        """
+        Bind the game to a recommended subset of high-performance cores.
+        """
+        pid = self.get_game_pid_or_none(game_label)
+        if pid is None:
+            return False, f"No running process found for '{game_label}'. Launch the game first."
+
+        cores = self._recommended_gaming_cores()
+        if not cores:
+            return False, "Could not determine recommended cores; psutil / CPU info unavailable."
+
+        ok, msg = self.set_cpu_affinity(pid, cores)
+        if ok:
+            return True, f"{msg} (game='{game_label}', preset='recommended')"
+        return False, msg
+
+    def apply_game_affinity_all_cores(self, game_label: str) -> Tuple[bool, str]:
+        """
+        Bind the game to all logical cores (removes previous restrictions).
+        """
+        ok, _ = self._is_psutil_ready()
+        if not ok or psutil is None:
+            return False, "psutil not available or platform unsupported."
+
+        pid = self.get_game_pid_or_none(game_label)
+        if pid is None:
+            return False, f"No running process found for '{game_label}'. Launch the game first."
+
+        try:
+            total = psutil.cpu_count(logical=True) or 0  # type: ignore[attr-defined]
+        except Exception:
+            total = 0
+
+        if total <= 0:
+            return False, "Could not determine CPU core count."
+
+        cores = list(range(total))
+        ok2, msg = self.set_cpu_affinity(pid, cores)
+        if ok2:
+            return True, f"{msg} (game='{game_label}', preset='all cores')"
+        return False, msg

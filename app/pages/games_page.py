@@ -1,8 +1,8 @@
 # app/pages/games_page.py
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTextEdit, QComboBox, QScrollArea
+    QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QTextEdit, QComboBox, QScrollArea
 )
 from PySide6.QtCore import Qt
 
@@ -12,12 +12,12 @@ from src.qrs.modules.game_optim import GameOptimizer
 
 class GamesPage(QWidget):
     """
-    Game Optimizer page.
+    Game Optimizer page
 
-    Layout is intentionally mirrored to WindowsPage:
-      - Top title
-      - Scroll area hosting a container widget
-      - Cards organized in horizontal rows where appropriate
+    Layout is intentionally made to mirror WindowsPage:
+      - One big title
+      - Everything else inside Card widgets
+      - Single scroll area with 10px margins and 16px spacing
     """
 
     def __init__(self, parent=None):
@@ -26,9 +26,9 @@ class GamesPage(QWidget):
 
         self.opt = GameOptimizer()
 
-        # -----------------------------------------------------
+        # -------------------------------------------------
         # SCROLL WRAPPER (same pattern as WindowsPage)
-        # -----------------------------------------------------
+        # -------------------------------------------------
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -43,21 +43,21 @@ class GamesPage(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(16)
 
-        # -----------------------------------------------------
+        # -------------------------------------------------
         # PAGE TITLE
-        # -----------------------------------------------------
+        # -------------------------------------------------
         title = QLabel("Game Optimizer")
-        title.setStyleSheet("font-size: 22pt; color: #DDE1EA; font-weight:700;")
+        title.setStyleSheet("font-size: 22pt; color: #DDE1EA; font-weight: 700;")
         root.addWidget(title)
 
-        # -----------------------------------------------------
-        # TARGET GAME (full-width card)
-        # -----------------------------------------------------
-        sel_card = Card("Target Game")
-        sel_body = sel_card.body()
+        # -------------------------------------------------
+        # TARGET GAME (Card)
+        # -------------------------------------------------
+        card_select = Card("Target Game")
+        sel_body = card_select.body()
 
-        sel_row = QHBoxLayout()
-        sel_row.setSpacing(12)
+        row_sel = QHBoxLayout()
+        row_sel.setSpacing(12)
 
         self.combo_game = QComboBox()
         self.combo_game.addItems([
@@ -72,38 +72,40 @@ class GamesPage(QWidget):
         self.btn_load_profile = QPushButton("Load Game Profile…")
         self.btn_save_profile = QPushButton("Save Game Profile…")
 
-        sel_row.addWidget(self.combo_game)
-        sel_row.addStretch()
-        sel_row.addWidget(self.btn_load_profile)
-        sel_row.addWidget(self.btn_save_profile)
+        row_sel.addWidget(self.combo_game)
+        row_sel.addStretch()
+        row_sel.addWidget(self.btn_load_profile)
+        row_sel.addWidget(self.btn_save_profile)
 
-        sel_body.addLayout(sel_row)
-        root.addWidget(sel_card)
+        sel_body.addLayout(row_sel)
+        root.addWidget(card_select)
 
-        # -----------------------------------------------------
-        # GAME OPTIMIZATION LOG (full-width card)
-        # -----------------------------------------------------
-        log_card = Card("Game Optimization Log")
-        log_body = log_card.body()
+        # -------------------------------------------------
+        # GAME OPTIMIZATION LOG (Card)
+        # -------------------------------------------------
+        card_log = Card("Game Optimization Log")
+        log_body = card_log.body()
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(200)
+        self.log.setMinimumHeight(180)
         log_body.addWidget(self.log)
 
-        root.addWidget(log_card)
+        root.addWidget(card_log)
 
-        # -----------------------------------------------------
-        # ROW 1: Fortnite Tweaks  |  System Tuning (Per Game)
-        # -----------------------------------------------------
-        row1 = QHBoxLayout()
-        row1.setSpacing(12)
+        # -------------------------------------------------
+        # FORTNITE TWEAKS + SYSTEM TUNING (ROW OF CARDS)
+        # -------------------------------------------------
+        row_ft = QHBoxLayout()
+        row_ft.setSpacing(12)
 
         # Fortnite Tweaks
-        fn_card = Card("Fortnite Tweaks")
-        fn_body = fn_card.body()
+        card_fn = Card("Fortnite Tweaks")
+        fn_body = card_fn.body()
 
-        self.btn_fn_disable_record = QPushButton("Disable Background Recording (Game Bar / DVR)")
+        self.btn_fn_disable_record = QPushButton(
+            "Disable Background Recording (Game Bar / DVR)"
+        )
         self.btn_fn_clean_logs = QPushButton("Clean Fortnite Logs & Crash Dumps")
         self.btn_fn_clean_shader = QPushButton("Clean Shader / Pipeline Caches")
         self.btn_fn_clean_dx = QPushButton("Clean DirectX Cache (Game Scope)")
@@ -117,33 +119,25 @@ class GamesPage(QWidget):
             fn_body.addWidget(b)
 
         # System Tuning (Per Game)
-        tuning_card = Card("System Tuning (Per Game)")
-        tune_body = tuning_card.body()
+        card_tuning = Card("System Tuning (Per Game)")
+        tune_body = card_tuning.body()
 
         self.btn_cpu_high = QPushButton("Set Game Process to HIGH Priority")
         self.btn_cpu_above = QPushButton("Set Game Process to ABOVE NORMAL")
         self.btn_toggle_nagle = QPushButton("Disable Nagle (Low-Latency)")
 
-        for b in (
-            self.btn_cpu_high,
-            self.btn_cpu_above,
-            self.btn_toggle_nagle,
-        ):
+        for b in (self.btn_cpu_high, self.btn_cpu_above, self.btn_toggle_nagle):
             tune_body.addWidget(b)
 
-        row1.addWidget(fn_card)
-        row1.addWidget(tuning_card)
-        root.addLayout(row1)
+        row_ft.addWidget(card_fn)
+        row_ft.addWidget(card_tuning)
+        root.addLayout(row_ft)
 
-        # -----------------------------------------------------
-        # ROW 2: Game Storage Tweaks  |  Game Profiles
-        # -----------------------------------------------------
-        row2 = QHBoxLayout()
-        row2.setSpacing(12)
-
-        # Game Storage Tweaks
-        storage_card = Card("Game Storage Tweaks")
-        st_body = storage_card.body()
+        # -------------------------------------------------
+        # GAME STORAGE TWEAKS (Card)
+        # -------------------------------------------------
+        card_store = Card("Game Storage Tweaks")
+        st_body = card_store.body()
 
         self.btn_storage_clean_temp = QPushButton("Clean Game Temp Files")
         self.btn_storage_clean_crash = QPushButton("Clean Game Crash Dumps")
@@ -160,9 +154,13 @@ class GamesPage(QWidget):
         ):
             st_body.addWidget(b)
 
-        # Game Profiles
-        profiles_card = Card("Game Profiles")
-        prof_body = profiles_card.body()
+        root.addWidget(card_store)
+
+        # -------------------------------------------------
+        # GAME PROFILES (Card)
+        # -------------------------------------------------
+        card_prof = Card("Game Profiles")
+        prof_body = card_prof.body()
 
         desc = QLabel(
             "Profiles store per-game optimization choices such as CPU priority, "
@@ -176,27 +174,32 @@ class GamesPage(QWidget):
         self.btn_profile_export = QPushButton("Export Profile to .qrsgame")
         self.btn_profile_import = QPushButton("Import Profile from .qrsgame")
 
-        prof_body.addWidget(self.btn_profile_apply)
-        prof_body.addWidget(self.btn_profile_export)
-        prof_body.addWidget(self.btn_profile_import)
+        for b in (
+            self.btn_profile_apply,
+            self.btn_profile_export,
+            self.btn_profile_import,
+        ):
+            prof_body.addWidget(b)
 
-        row2.addWidget(storage_card)
-        row2.addWidget(profiles_card)
-        root.addLayout(row2)
+        root.addWidget(card_prof)
 
-        # Stretch at bottom
+        # Stretch so content hugs the top when short
         root.addStretch()
 
-        # Attach scroll to this widget
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(scroll)
+        # Attach scroll to this widget (same as WindowsPage)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addWidget(scroll)
 
-        # -----------------------------------------------------
-        # SIGNAL CONNECTIONS
-        # -----------------------------------------------------
+        # Wire signals
+        self._connect()
 
-        # Target game profile load/save – stubs for now
+    # -------------------------------------------------
+    # SIGNAL CONNECTIONS
+    # -------------------------------------------------
+    def _connect(self):
+        # Game selector profile buttons (UI stubs for now)
         self.btn_load_profile.clicked.connect(
             lambda: self._log("[Game] Load Game Profile… (coming soon)")
         )
@@ -204,69 +207,69 @@ class GamesPage(QWidget):
             lambda: self._log("[Game] Save Game Profile… (coming soon)")
         )
 
-        # Fortnite / global tweaks (real logic)
+        # Fortnite tweaks (real backend logic)
         self.btn_fn_disable_record.clicked.connect(self._fn_disable_record)
         self.btn_fn_clean_logs.clicked.connect(self._fn_clean_logs)
         self.btn_fn_clean_shader.clicked.connect(self._fn_clean_shader)
         self.btn_fn_clean_dx.clicked.connect(self._clean_dx)
 
-        # Storage logic (partially implemented)
+        # System tuning – currently stubs
+        self.btn_cpu_high.clicked.connect(
+            lambda: self._log("[CPU] Set game process priority: HIGH (not implemented yet)")
+        )
+        self.btn_cpu_above.clicked.connect(
+            lambda: self._log("[CPU] Set game process priority: ABOVE NORMAL (not implemented yet)")
+        )
+        self.btn_toggle_nagle.clicked.connect(
+            lambda: self._log("[Network] Disable Nagle per-game (not implemented yet)")
+        )
+
+        # Storage tweaks
+        self.btn_storage_clean_temp.clicked.connect(self._clean_temp)
         self.btn_storage_clean_crash.clicked.connect(self._clean_crash)
         self.btn_storage_clean_shader.clicked.connect(self._clean_shader)
         self.btn_storage_clean_dx2.clicked.connect(self._clean_dx)
+        self.btn_storage_reset_cfg.clicked.connect(self._reset_cfg)
 
-        # Stubs for not-yet-implemented actions
-        self.btn_cpu_high.clicked.connect(
-            lambda: self._log("[CPU] Set game process priority: HIGH (TODO)")
-        )
-        self.btn_cpu_above.clicked.connect(
-            lambda: self._log("[CPU] Set game process priority: ABOVE NORMAL (TODO)")
-        )
-        self.btn_toggle_nagle.clicked.connect(
-            lambda: self._log("[Network] Disable Nagle per-game (TODO)")
-        )
-
-        self.btn_storage_clean_temp.clicked.connect(
-            lambda: self._log("[Storage] Clean game temp files (TODO)")
-        )
-        self.btn_storage_reset_cfg.clicked.connect(
-            lambda: self._log("[Storage] Reset game config with backup (TODO)")
-        )
-
+        # Profiles (stubs for now)
         self.btn_profile_apply.clicked.connect(
-            lambda: self._log("[Profile] Apply current game profile (TODO)")
+            lambda: self._log("[Profile] Apply current game profile (coming soon)")
         )
         self.btn_profile_export.clicked.connect(
-            lambda: self._log("[Profile] Export profile to .qrsgame (TODO)")
+            lambda: self._log("[Profile] Export profile to .qrsgame (coming soon)")
         )
         self.btn_profile_import.clicked.connect(
-            lambda: self._log("[Profile] Import profile from .qrsgame (TODO)")
+            lambda: self._log("[Profile] Import profile from .qrsgame (coming soon)")
         )
 
-    # ---------------------------------------------------------
-    # BACKEND HOOKS (use src.qrs.modules.game_optim.GameOptimizer)
-    # ---------------------------------------------------------
-
+    # -------------------------------------------------
+    # BACKEND LOGIC HOOKS
+    # -------------------------------------------------
     def _fn_disable_record(self):
         ok1, msg1 = self.opt.disable_xbox_game_bar()
         ok2, msg2 = self.opt.disable_game_dvr()
         self._log_result(
-            "[Fortnite] Disable Recording",
+            "[Fortnite] Disable Game Bar / DVR",
             ok1 and ok2,
             msg1 + "\n" + msg2,
         )
 
     def _fn_clean_logs(self):
         ok, msg = self.opt.clean_fortnite_logs_and_crashes()
-        self._log_result("[Fortnite] Clean Logs/Crashes", ok, msg)
+        self._log_result("[Fortnite] Clean logs & crash dumps", ok, msg)
 
     def _fn_clean_shader(self):
         ok, msg = self.opt.clean_fortnite_shader_cache()
-        self._log_result("[Fortnite] Clean Shader Cache", ok, msg)
+        self._log_result("[Fortnite] Clean shader / pipeline cache", ok, msg)
 
     def _clean_dx(self):
         ok, msg = self.opt.clean_directx_cache()
-        self._log_result("[DirectX] Cache Cleanup", ok, msg)
+        self._log_result("[DirectX] Cache cleanup", ok, msg)
+
+    # ---- Storage helpers ----
+    def _clean_temp(self):
+        game = self.combo_game.currentText()
+        self._log(f"[Storage] Clean temp files for {game} (not implemented yet)")
 
     def _clean_crash(self):
         game = self.combo_game.currentText()
@@ -282,10 +285,13 @@ class GamesPage(QWidget):
         else:
             self._log(f"[Storage] Shader cleanup not implemented for {game}")
 
-    # ---------------------------------------------------------
-    # LOGGING HELPERS
-    # ---------------------------------------------------------
+    def _reset_cfg(self):
+        game = self.combo_game.currentText()
+        self._log(f"[Storage] Reset config for {game} (coming soon, with backup)")
 
+    # -------------------------------------------------
+    # LOGGING HELPERS
+    # -------------------------------------------------
     def _log(self, text: str):
         self.log.append(f"<span style='color:#DDE1EA'>{text}</span>")
 
@@ -297,5 +303,5 @@ class GamesPage(QWidget):
                .replace(">", "&gt;")
         )
         self.log.append(
-            f"<span style='color:{color}'>{label}:<br>{safe}</span>"
+            f"<span style='color:{color}'>{label}: {safe}</span>"
         )

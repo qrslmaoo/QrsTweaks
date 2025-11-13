@@ -1,100 +1,131 @@
-#  QrsTweaks Roadmap
-
-Welcome to the development roadmap for **QrsTweaks**, the all-in-one Windows optimization suite built in Python + PySide6.  
-This document outlines every major planned feature, milestone, and enhancement — from technical infrastructure to user experience.
+# QrsTweaks Roadmap
+A structured long-term development plan for the full Windows & Game optimization suite.
 
 ---
 
-##  Phase 1 — Foundation ( Completed)
-**Goal:** Establish a stable, safe, and transparent optimization core.
-
-- [x] Frameless, translucent PySide6 GUI (Suite layout)
-- [x] Scrollable, animated cards for all pages
-- [x] System Scan (real cleanable-space detection)
-- [x] Power, Network, Memory, Startup optimizers
-- [x] Windows Game Mode + High-Perf toggle logic
-- [x] Safe Registry + PowerShell tweak handling
-- [x] Restore defaults + Log exporter
-- [x] Profile loader / applier (JSON)
+## ✔ Phase 1 — Core Application Setup (Completed)
+- Base PySide6 app skeleton  
+- Frameless window + sidebar navigation  
+- Windows Optimizer page implemented  
+- Game Optimizer initial UI created  
+- Password vault skeleton created  
+- Global theme + QSS foundation  
 
 ---
 
-##  Phase 2 — Power-User Expansion *(in progress)*
-**Goal:** Add advanced but still safe performance enhancements.
+## ✔ Phase 2 — Windows Optimizer Core Features (Completed)
+### Implemented:
+- System Scan  
+- Temp Cleanup  
+- Deep Cleanup  
+- Power Plan (High Performance)  
+- Safety (Restore Point)  
+- Memory-Leak Protector  
+- Network Optimizer (DNS / CTCP / Nagle / Autotuning)  
+- Startup Analyzer  
+- Storage Analyzer (Largest files, directories, drive scan)  
+- Profiles (gaming/productivity/streaming)  
+- System RepairOps (DISM / SFC / Update repair)  
+- Safe Debloat module  
+- UI tweaks (Explorer, Widgets, Chat, etc.)  
+- Backup & Restore system  
+- Scrolling, spacing, card layout perfected  
 
-- [ ] Deep Cleanup: browser caches, prefetch, Windows.old
-- [ ] Disk analysis: SSD TRIM, defrag, large/duplicate file finder
-- [ ] Service optimization: disable SysMain, telemetry, Xbox tasks
-- [ ] Network repair + adaptive DNS auto-test
-- [ ] "Apply Gaming Profile" (one-click performance preset)
-- [ ] Log changelog of each tweak
-- [ ] Scrollbar polish + visual refinements
-
----
-
-##  Phase 3 — Profiles & Automation
-**Goal:** Empower users to customize and share their own performance styles.
-
-- [ ] **Profile System v2**
-  - Load / save / edit tweak sets (`.json`)
-  - Built-in presets: *Gaming*, *Creator*, *Minimal*, *Balanced*
-  - "Apply Profile" and "Revert Profile" confirmation
-- [ ] **Profile Store**
-  - Integrate GitHub-hosted community profiles
-  - Download, rate, and fork configs
-  - Offline profile caching
-- [ ] Scheduler
-  - Schedule profile switching (Gaming at 6 PM, Productivity at 8 AM)
-  - Built via Task Scheduler integration
-- [ ] Portable mode (self-contained settings/logs)
-- [ ] Auto-update check (compares latest GitHub Release)
+WindowsPage is now 100% feature-complete.
 
 ---
 
-##  Phase 4 — Insight & Visualization
-**Goal:** Give users clear, visual feedback on their system’s performance.
+## ✔ Phase 3 — Game Optimizer UI Rewrite (Completed)
+### Implemented:
+- Full rewrite of GamesPage  
+- Matching layout to WindowsPage  
+- Full scroll wrapper with proper margins  
+- Cards for: Target Game, Log, Fortnite Tweaks, Per-Game Tuning, Storage Tweaks, Game Profiles  
+- Backend hookups for:
+  - Disable Game Bar / DVR  
+  - Clean Fortnite Logs + Crash Dumps  
+  - Clean Fortnite Shader Cache  
+  - Clean DirectX Cache  
+- Removed broken dividers  
+- Fully aligned & consistent UI  
 
-- [ ] **Performance Score**
-  - Before/After system scan comparison
-  - FPS delta tracker (manual entry)
-  - "Performance Index" summary card
-- [ ] **Storage Heatmap**
-  - Top 10 largest directories (with bar visualization)
-- [ ] **Resource Overview**
-  - CPU, RAM, Disk utilization snapshot (non-monitoring)
-  - Graphical meters using `PySide6.QtCharts`
-- [ ] Animated cleaning progress bars + success glow indicators
-- [ ] Theme switcher (Cyber Red, Neon Blue, Stealth Black)
+---
+  
+## Phase 4 — Game Optimizer Logic (IN PROGRESS)
+
+### ✔ Completed so far:
+- Fortnite cleaning fully wired  
+- DirectX cleaning wired  
+- Crash/Shader logic connected  
+- Game profile buttons safe + stubbed  
+
+### 🚧 Next Tasks:
+### **A) Per-Game CPU Priority**
+- Detect active game process  
+- Apply HIGH / ABOVE NORMAL  
+- Safe fallback if not running  
+
+### **B) Per-Game Nagle / TCP Latency Mode**
+- Game-targeted registry tweaks  
+- Log clean results  
+
+### **C) Universal Game Temp Cleaner**
+- Clean `%LOCALAPPDATA%/<Game>` logs/crashes  
+- Clean `%TEMP%/<Game>*`  
+- Fortnite gets special-case logic  
+
+### **D) Reset Game Config**
+- Backup configs (`GameUserSettings.ini`, etc.)  
+- Restore defaults  
+- Add revert option later  
 
 ---
 
-##  Phase 5 — Quality, Community & Distribution
-**Goal:** Make QrsTweaks the top-rated open-source optimizer on GitHub.
-
-- [ ] Code cleanup & modular structure (`src/qrs/modules/*`)
-- [ ] Type hints and docstrings for all modules
-- [ ] Tests for safety (simulate tweak execution)
-- [ ] GitHub Actions build/test pipeline
-- [ ] Windows `.exe` packaging via PyInstaller
-- [ ] Version tags for each stable milestone
-- [ ] README showcase:
-  - Screenshots, GIFs, demo video
-  - “Safe Tweaks Only” transparency badge
-- [ ] Contributor Guide + Issue Templates
-- [ ] Optional Discord community link
+## Phase 5 — Game Profile System (Not Started)
+- `.qrsgame` export format  
+- `.qrsgame` import  
+- Store CPU priority, network modes, cleanup behavior, shader behavior, config resets  
+- Per-game preset templates  
 
 ---
 
-##  Vision
-QrsTweaks aims to be the **cleanest, most transparent, and most effective** Windows optimization tool on GitHub —  
-no telemetry, no ads, no shady scripts. 100 % local execution, fully open-source, and user-controllable.
+## Phase 6 — Global Profile Manager (Not Started)
+- Combine `.qrsp` + `.qrsgame`  
+- Multi-level profile application  
 
 ---
 
-###  Suggestions?
-Open a [GitHub Issue](https://github.com/qrslmaoo/QrsTweaks/issues/new/choose) with the label **feature-request**,  
-or discuss in the community thread once the Discord launches.
+## Phase 7 — Password Vault Completion
+- AES-256 encryption  
+- UI improvements  
+- Import/export encrypted vault  
+- Clipboard auto-clear  
+- Security audits  
 
 ---
 
-> **QrsTweaks** — Built for performance. Designed for clarity. Loved by power users.
+## Phase 8 — MSI Installer + Release Packaging
+- PyInstaller EXE (ignored via .gitignore)  
+- MSI installer  
+- GitHub Releases  
+- Auto-update checker (non-AI)  
+
+---
+
+## Phase 9 — Marketing & Branding
+- GitHub README polish  
+- GIF showcase  
+- Feature comparison charts  
+- Branding & visual identity  
+
+---
+
+# ✔ Status Summary
+| System | Status |
+|-------|--------|
+| Windows Optimizer | 100% COMPLETE |
+| Game Optimizer UI | 100% COMPLETE |
+| Game Optimizer Logic | IN PROGRESS |
+| Passwords | 20% |
+| Backup System | ✓ |
+| Installer | Not started |
