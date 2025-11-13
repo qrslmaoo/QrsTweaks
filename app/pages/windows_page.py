@@ -192,7 +192,6 @@ class WindowsPage(QWidget):
         # ----------------------------------------
         # ADVANCED TOOLS (NEW)
         # ----------------------------------------
-        root.addWidget(Divider("Advanced Tools"))
 
         # ----- System RepairOps -----
         repair_card = Card("System RepairOps")
