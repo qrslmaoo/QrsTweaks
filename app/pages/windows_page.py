@@ -1,36 +1,15 @@
 # app/pages/windows_page.py
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTextEdit, QLabel, QScrollArea
+    QTextEdit, QLabel, QScrollArea, QFileDialog
 )
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt
 from app.ui.widgets.card import Card
 from app.ui.widgets.toggle import Toggle
 from app.ui.widgets.glow_indicator import GlowIndicator
+from app.ui.widgets.divider import Divider
 from app.ui.animations import fade_in, slide_in_y
 from src.qrs.modules.windows_optim import WindowsOptimizer
-
-
-# ---------- Thread worker for long scans ----------
-class _ScanThread(QThread):
-    finished_text = Signal(str)
-    failed_text = Signal(str)
-
-    def __init__(self, fn, *args, **kwargs):
-        super().__init__()
-        self._fn = fn
-        self._args = args
-        self._kwargs = kwargs
-
-    def run(self):
-        try:
-            ok, msg = self._fn(*self._args, **self._kwargs)
-            if ok:
-                self.finished_text.emit(msg or "")
-            else:
-                self.failed_text.emit(msg or "Unknown error")
-        except Exception as e:
-            self.failed_text.emit(str(e))
 
 
 class WindowsPage(QWidget):
@@ -38,52 +17,61 @@ class WindowsPage(QWidget):
         super().__init__(parent)
         self.setStyleSheet("background: transparent;")
         self.opt = WindowsOptimizer()
-        self._threads = []
 
-        # ---------- Scroll container ----------
+        # ----------------------------------------
+        # Scroll wrapper
+        # ----------------------------------------
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("""
-            QScrollArea { border: none; background: transparent; }
-            QScrollBar:vertical { background: rgba(255,255,255,0.05); width: 12px; border-radius: 6px; }
-            QScrollBar::handle:vertical { background: rgba(255,255,255,0.20); border-radius: 6px; min-height: 20px; }
-            QScrollBar::handle:vertical:hover { background: rgba(255,255,255,0.35); }
-        """)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setStyleSheet("background: transparent;")
 
-        content = QWidget()
-        root = QVBoxLayout(content)
+        container = QWidget()
+        scroll.setWidget(container)
+
+        root = QVBoxLayout(container)
         root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(12)
+        root.setSpacing(16)
 
-        # Header
-        header = QLabel("Windows Optimizer")
-        header.setStyleSheet("color:#DDE1EA; font-size:20pt; font-weight:700;")
-        root.addWidget(header)
+        # ----------------------------------------
+        # HEADER
+        # ----------------------------------------
+        title = QLabel("Windows Optimizer")
+        title.setStyleSheet("font-size: 22pt; color: #DDE1EA; font-weight:700;")
+        root.addWidget(title)
 
-        # =============== System Scan ===============
+        # ----------------------------------------
+        # SYSTEM SCAN
+        # ----------------------------------------
         scan = Card("System Scan")
         sv = scan.body()
-        top = QHBoxLayout()
+
+        head = QHBoxLayout()
         self.btn_scan = QPushButton("Run Quick Scan")
         self.spinner = GlowIndicator()
         self.spinner.hide()
-        top.addWidget(self.btn_scan)
-        top.addStretch()
-        top.addWidget(self.spinner)
-        sv.addLayout(top)
+
+        head.addWidget(self.btn_scan)
+        head.addStretch()
+        head.addWidget(self.spinner)
+        sv.addLayout(head)
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(220)
+        self.log.setMinimumHeight(200)
         sv.addWidget(self.log)
+
         root.addWidget(scan)
 
-        # =============== Actions Row 1 ===============
+        # ----------------------------------------
+        # ROW 1  (Power / Cleanup / Safety)
+        # ----------------------------------------
         row1 = QHBoxLayout()
         row1.setSpacing(12)
 
+        # POWER PLAN
         power = Card("Power Plan")
         pv = power.body()
         self.turbo = Toggle()
@@ -91,318 +79,536 @@ class WindowsPage(QWidget):
         self.btn_plan = QPushButton("Create High Performance Plan")
         pv.addWidget(self.btn_plan)
 
-        clean = Card("Cleanup")
-        cv = clean.body()
-        self.btn_clean = QPushButton("Clean Temp Files (Quick)")
-        cv.addWidget(self.btn_clean)
+        # CLEANUP
+        cleanup = Card("Cleanup")
+        cl = cleanup.body()
+        self.btn_clean = QPushButton("Clean Temp Files")
+        self.btn_deep_clean = QPushButton("Deep Cleanup (System/Junk)")
+        cl.addWidget(self.btn_clean)
+        cl.addWidget(self.btn_deep_clean)
 
+        # SAFETY
         safety = Card("Safety")
-        sv2 = safety.body()
+        st = safety.body()
         self.btn_restore = QPushButton("Create Restore Point")
-        sv2.addWidget(self.btn_restore)
+        st.addWidget(self.btn_restore)
 
         row1.addWidget(power)
-        row1.addWidget(clean)
+        row1.addWidget(cleanup)
         row1.addWidget(safety)
         root.addLayout(row1)
 
-        # =============== Deep Cleanup ===============
-        deep = Card("Deep Cleanup")
-        dv = deep.body()
-        self.btn_clean_browsers = QPushButton("Clean Browser Caches (Chrome/Edge/Brave/Firefox)")
-        self.btn_clean_prefetch = QPushButton("Clean Prefetch & System Logs")
-        self.btn_clean_winold = QPushButton("Remove Windows.old (Permanent)")
-        self.btn_clean_full = QPushButton("Run Full Deep Cleanup")
-        for b in (
-            self.btn_clean_browsers,
-            self.btn_clean_prefetch,
-            self.btn_clean_winold,
-            self.btn_clean_full,
-        ):
-            dv.addWidget(b)
-        root.addWidget(deep)
+        # ----------------------------------------
+        # ROW 2  (MemLeak / Network / Startup)
+        # ----------------------------------------
+        row2 = QHBoxLayout()
+        row2.setSpacing(12)
 
-        # =============== Divider: Storage Tools ===============
-        divider_storage = QLabel("──────────────  Storage Tools  ───────────────")
-        divider_storage.setAlignment(Qt.AlignHCenter)
-        divider_storage.setStyleSheet("""
-            color: rgba(210,220,245,0.9);
-            font-size: 11pt; font-weight: 600; letter-spacing: 0.5px;
-            padding: 10px 0;
-        """)
-        root.addWidget(divider_storage)
+        # MEMORY LEAK
+        leak = Card("Memory-Leak Protector")
+        lv = leak.body()
+        self.btn_ml_start = QPushButton("Start (Fortnite, 1024 MB)")
+        self.btn_ml_stop = QPushButton("Stop")
+        lv.addWidget(self.btn_ml_start)
+        lv.addWidget(self.btn_ml_stop)
 
-        # =============== Storage Tools ===============
-        storage_row = QHBoxLayout()
-        storage_row.setSpacing(12)
+        # NETWORK
+        net = Card("Network Optimizer")
+        nv = net.body()
 
-        disk_an = Card("Disk Analyzer")
-        dav = disk_an.body()
-        self.btn_analyze_files = QPushButton("Analyze Largest Files (Top 25)")
-        self.btn_analyze_dirs = QPushButton("Show Top Directories (by size)")
-        dav.addWidget(self.btn_analyze_files)
-        dav.addWidget(self.btn_analyze_dirs)
+        self.btn_dns_cf = QPushButton("Set DNS: 1.1.1.1 / 1.0.0.1")
+        self.btn_dns_gg = QPushButton("Set DNS: 8.8.8.8 / 8.8.4.4")
+        self.btn_ctcp_on = QPushButton("Enable CTCP")
+        self.btn_ctcp_off = QPushButton("Disable CTCP")
+        self.btn_auto_norm = QPushButton("TCP Autotuning: normal")
+        self.btn_auto_restr = QPushButton("TCP Autotuning: restricted")
+        self.btn_nagle_off = QPushButton("Disable Nagle (gaming)")
+        self.btn_ping = QPushButton("Latency test (1.1.1.1)")
 
-        storage_opt = Card("Storage Optimizer")
-        sov = storage_opt.body()
-        self.btn_ssd_trim = QPushButton("Optimize SSD (TRIM)")
-        self.btn_hdd_defrag = QPushButton("Defrag HDD (Safe)")
-        self.btn_winupdate = QPushButton("Clean Windows Update Files")
-        sov.addWidget(self.btn_ssd_trim)
-        sov.addWidget(self.btn_hdd_defrag)
-        sov.addWidget(self.btn_winupdate)
-
-        drive_health = Card("Drive Health")
-        dhv = drive_health.body()
-        self.btn_drive_health = QPushButton("Check Drive Health")
-        dhv.addWidget(self.btn_drive_health)
-
-        storage_row.addWidget(disk_an)
-        storage_row.addWidget(storage_opt)
-        storage_row.addWidget(drive_health)
-        root.addLayout(storage_row)
-
-        # =============== Divider: System Optimization ===============
-        divider_system = QLabel("──────────────  System Optimization  ───────────────")
-        divider_system.setAlignment(Qt.AlignHCenter)
-        divider_system.setStyleSheet("""
-            color: rgba(210,220,245,0.9);
-            font-size: 11pt; font-weight: 600; letter-spacing: 0.5px;
-            padding: 10px 0;
-        """)
-        root.addWidget(divider_system)
-
-        # =============== System Optimization ===============
-        sys_row = QHBoxLayout()
-        sys_row.setSpacing(12)
-
-        perf_card = Card("Performance & Service Tweaks")
-        pv2 = perf_card.body()
-        self.btn_apply_tweaks = QPushButton("Apply Recommended System Tweaks")
-        self.btn_revert_tweaks = QPushButton("Revert to Default Windows Settings")
-        pv2.addWidget(self.btn_apply_tweaks)
-        pv2.addWidget(self.btn_revert_tweaks)
-
-        game_card = Card("Gaming Mode Enhancer")
-        gv = game_card.body()
-        self.btn_apply_gaming = QPushButton("Apply Gaming Mode")
-        self.btn_revert_gaming = QPushButton("Revert to Normal Mode")
-        gv.addWidget(self.btn_apply_gaming)
-        gv.addWidget(self.btn_revert_gaming)
-
-        sys_row.addWidget(perf_card)
-        sys_row.addWidget(game_card)
-        root.addLayout(sys_row)
-
-        # ====================================================
-        # 🧩 Startup & Background Services
-        # ====================================================
-        divider_startup = QLabel("──────────────  Startup & Background Services  ───────────────")
-        divider_startup.setAlignment(Qt.AlignHCenter)
-        divider_startup.setStyleSheet("""
-            color: rgba(210,220,245,0.9);
-            font-size: 11pt; font-weight: 600; letter-spacing: 0.5px;
-            padding: 14px 0;
-        """)
-        root.addWidget(divider_startup)
-
-        startup_row = QHBoxLayout()
-        startup_row.setSpacing(12)
-
-        startup_card = Card("Startup Apps Manager")
-        sm = startup_card.body()
-        self.btn_list_startup = QPushButton("List All Startup Apps")
-        self.btn_disable_startup = QPushButton("Disable Selected Apps")
-        self.btn_enable_startup = QPushButton("Enable Selected Apps")
-        self.btn_remove_startup = QPushButton("Remove Entry")
         for w in (
-            self.btn_list_startup,
-            self.btn_disable_startup,
-            self.btn_enable_startup,
-            self.btn_remove_startup,
+            self.btn_dns_cf, self.btn_dns_gg,
+            self.btn_ctcp_on, self.btn_ctcp_off,
+            self.btn_auto_norm, self.btn_auto_restr,
+            self.btn_nagle_off, self.btn_ping
         ):
-            sm.addWidget(w)
+            nv.addWidget(w)
 
-        bg_card = Card("Background Service Optimizer")
-        bm = bg_card.body()
-        self.btn_list_heavy = QPushButton("Show Heavy Background Services")
-        self.btn_disable_non = QPushButton("Disable Non-Essential Services")
-        self.btn_restore_serv = QPushButton("Restore Default Services")
-        bm.addWidget(self.btn_list_heavy)
-        bm.addWidget(self.btn_disable_non)
-        bm.addWidget(self.btn_restore_serv)
+        # STARTUP
+        startup = Card("Startup Optimizer")
+        sv2 = startup.body()
+        self.btn_list_startup = QPushButton("List Startup Entries")
+        sv2.addWidget(self.btn_list_startup)
 
-        startup_row.addWidget(startup_card)
-        startup_row.addWidget(bg_card)
-        root.addLayout(startup_row)
+        row2.addWidget(leak)
+        row2.addWidget(net)
+        row2.addWidget(startup)
+        root.addLayout(row2)
 
-        # Stretch and finalize
+        # ----------------------------------------
+        # STORAGE ANALYZER
+        # ----------------------------------------
+
+        storage = Card("Storage Analyzer")
+        st = storage.body()
+
+        self.btn_analyze_drive = QPushButton("Analyze Disk Usage")
+        self.btn_top25 = QPushButton("Analyze Largest 25 Files")
+        self.btn_top_dirs = QPushButton("Analyze Largest Directories")
+        self.btn_clear_cache = QPushButton("Clear Browser + Store Cache")
+
+        st.addWidget(self.btn_analyze_drive)
+        st.addWidget(self.btn_top25)
+        st.addWidget(self.btn_top_dirs)
+        st.addWidget(self.btn_clear_cache)
+
+        root.addWidget(storage)
+
+        # ----------------------------------------
+        # PROFILE MANAGER
+        # ----------------------------------------
+    
+
+        prof = Card("Profile Manager")
+        pf = prof.body()
+
+        self.btn_prof_game = QPushButton("Apply Gaming Profile")
+        self.btn_prof_prod = QPushButton("Apply Productivity Profile")
+        self.btn_prof_stream = QPushButton("Apply Streaming Profile")
+        self.btn_prof_save = QPushButton("Save Current As Profile…")
+        self.btn_prof_load = QPushButton("Load Custom Profile…")
+
+        for w in (
+            self.btn_prof_game,
+            self.btn_prof_prod,
+            self.btn_prof_stream,
+            self.btn_prof_save,
+            self.btn_prof_load,
+        ):
+            w.setMinimumHeight(34)
+            pf.addWidget(w)
+
+        root.addWidget(prof)
+
+        # ----------------------------------------
+        # ADVANCED TOOLS (NEW)
+        # ----------------------------------------
+        root.addWidget(Divider("Advanced Tools"))
+
+        # ----- System RepairOps -----
+        repair_card = Card("System RepairOps")
+        rv = repair_card.body()
+
+        self.btn_repair_wu = QPushButton("Repair Windows Update")
+        self.btn_reset_net = QPushButton("Reset Network Stack")
+        self.btn_dism_sfc = QPushButton("Run DISM + SFC Repair")
+        self.btn_reset_store = QPushButton("Reset Microsoft Store Cache")
+
+        for b in (
+            self.btn_repair_wu,
+            self.btn_reset_net,
+            self.btn_dism_sfc,
+            self.btn_reset_store,
+        ):
+            b.setMinimumHeight(34)
+            rv.addWidget(b)
+
+        root.addWidget(repair_card)
+
+        # ----- Safe Debloat -----
+        debloat_card = Card("Safe Debloat")
+        dv = debloat_card.body()
+
+        self.btn_debloat_xbox = QPushButton("Disable Xbox Game Bar / DVR")
+        self.btn_debloat_bg = QPushButton("Disable Background Apps")
+        self.btn_debloat_telemetry = QPushButton("Disable Telemetry Tasks (safe)")
+        self.btn_debloat_cortana = QPushButton("Limit Cortana / Search Indexing")
+        self.btn_debloat_revert = QPushButton("Revert Safe Debloat Profile")
+
+        for b in (
+            self.btn_debloat_xbox,
+            self.btn_debloat_bg,
+            self.btn_debloat_telemetry,
+            self.btn_debloat_cortana,
+            self.btn_debloat_revert,
+        ):
+            b.setMinimumHeight(34)
+            dv.addWidget(b)
+
+        root.addWidget(debloat_card)
+
+        # ----- Taskbar / Explorer UI Tweaks -----
+        ui_card = Card("Taskbar & Explorer Tweaks")
+        uv = ui_card.body()
+
+        self.btn_ui_disable_bing = QPushButton("Disable Bing / Web in Start Search")
+        self.btn_ui_disable_widgets = QPushButton("Hide Widgets")
+        self.btn_ui_disable_chat = QPushButton("Hide Chat Icon")
+        self.btn_ui_explorer_thispc = QPushButton("Open Explorer in 'This PC'")
+        self.btn_ui_show_ext = QPushButton("Show File Extensions")
+        self.btn_ui_restore_ui = QPushButton("Restore UI Defaults")
+
+        for b in (
+            self.btn_ui_disable_bing,
+            self.btn_ui_disable_widgets,
+            self.btn_ui_disable_chat,
+            self.btn_ui_explorer_thispc,
+            self.btn_ui_show_ext,
+            self.btn_ui_restore_ui,
+        ):
+            b.setMinimumHeight(34)
+            uv.addWidget(b)
+
+        root.addWidget(ui_card)
+
+        # ----- Backup & Restore -----
+        backup_card = Card("Backup & Restore")
+        bv = backup_card.body()
+
+        self.btn_backup_create = QPushButton("Create Backup Snapshot")
+        self.btn_backup_restore = QPushButton("Restore Latest Backup")
+        self.btn_backup_open = QPushButton("Open Backup Folder")
+
+        for b in (
+            self.btn_backup_create,
+            self.btn_backup_restore,
+            self.btn_backup_open,
+        ):
+            b.setMinimumHeight(34)
+            bv.addWidget(b)
+
+        root.addWidget(backup_card)
+
         root.addStretch()
-        scroll.setWidget(content)
 
+        # attach scroll to main layout
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(scroll)
 
-        # ---- Signals ----
+        # wire everything
+        self._connect()
+
+    # ----------------------------------------
+    # SIGNAL CONNECTIONS
+    # ----------------------------------------
+    def _connect(self):
+        # scan
         self.btn_scan.clicked.connect(self._scan)
-        self.btn_plan.clicked.connect(self._plan)
+
+        # cleanup
         self.btn_clean.clicked.connect(self._clean)
+        self.btn_deep_clean.clicked.connect(self._deep_clean)
+
+        # safety
         self.btn_restore.clicked.connect(self._restore)
 
-        self.btn_clean_browsers.clicked.connect(self._deep_browsers)
-        self.btn_clean_prefetch.clicked.connect(self._deep_prefetch)
-        self.btn_clean_winold.clicked.connect(self._deep_winold)
-        self.btn_clean_full.clicked.connect(self._deep_full)
+        # power
+        self.btn_plan.clicked.connect(self._plan)
 
-        self.btn_analyze_files.clicked.connect(self._analyze_files_threaded)
-        self.btn_analyze_dirs.clicked.connect(self._analyze_dirs_threaded)
-        self.btn_ssd_trim.clicked.connect(self._ssd_trim)
-        self.btn_hdd_defrag.clicked.connect(self._hdd_defrag)
-        self.btn_winupdate.clicked.connect(self._winupdate_cleanup)
-        self.btn_drive_health.clicked.connect(self._drive_health)
+        # mem leak
+        self.btn_ml_start.clicked.connect(self._ml_start)
+        self.btn_ml_stop.clicked.connect(self._ml_stop)
 
-        self.btn_apply_tweaks.clicked.connect(self._apply_tweaks)
-        self.btn_revert_tweaks.clicked.connect(self._revert_tweaks)
-        self.btn_apply_gaming.clicked.connect(self._apply_gaming)
-        self.btn_revert_gaming.clicked.connect(self._revert_gaming)
+        # network
+        self.btn_dns_cf.clicked.connect(lambda: self._dns("1.1.1.1", "1.0.0.1"))
+        self.btn_dns_gg.clicked.connect(lambda: self._dns("8.8.8.8", "8.8.4.4"))
+        self.btn_ctcp_on.clicked.connect(lambda: self._ctcp(True))
+        self.btn_ctcp_off.clicked.connect(lambda: self._ctcp(False))
+        self.btn_auto_norm.clicked.connect(lambda: self._autotune("normal"))
+        self.btn_auto_restr.clicked.connect(lambda: self._autotune("restricted"))
+        self.btn_nagle_off.clicked.connect(self._nagle_off)
+        self.btn_ping.clicked.connect(self._ping)
 
+        # startup
         self.btn_list_startup.clicked.connect(self._startup_list)
-        self.btn_disable_startup.clicked.connect(self._startup_disable_auto)
-        self.btn_enable_startup.clicked.connect(self._startup_enable_disabled)
-        self.btn_remove_startup.clicked.connect(self._startup_remove_disabled)
 
-        self.btn_list_heavy.clicked.connect(self._services_list_heavy)
-        self.btn_disable_non.clicked.connect(self._services_disable_non)
-        self.btn_restore_serv.clicked.connect(self._services_restore_defaults)
+        # storage
+        self.btn_analyze_drive.clicked.connect(self._analyze_drive)
+        self.btn_top25.clicked.connect(self._top25)
+        self.btn_top_dirs.clicked.connect(self._top_dirs)
+        self.btn_clear_cache.clicked.connect(self._clear_cache)
 
-        # ---- Animations ----
-        for w in (
-            scan, power, clean, safety, deep, disk_an, storage_opt, drive_health,
-            perf_card, game_card, startup_card, bg_card
-        ):
-            fade_in(w)
-            slide_in_y(w)
+        # profiles
+        self.btn_prof_game.clicked.connect(lambda: self._apply_profile("gaming"))
+        self.btn_prof_prod.clicked.connect(lambda: self._apply_profile("productivity"))
+        self.btn_prof_stream.clicked.connect(lambda: self._apply_profile("streaming"))
+        self.btn_prof_save.clicked.connect(self._save_profile)
+        self.btn_prof_load.clicked.connect(self._load_profile)
 
-    # ---------- Core ----------
+        # advanced tools: RepairOps
+        self.btn_repair_wu.clicked.connect(self._repair_wu)
+        self.btn_reset_net.clicked.connect(self._reset_net)
+        self.btn_dism_sfc.clicked.connect(self._run_dism_sfc)
+        self.btn_reset_store.clicked.connect(self._reset_store_cache)
+
+        # advanced tools: Debloat
+        self.btn_debloat_xbox.clicked.connect(self._debloat_xbox)
+        self.btn_debloat_bg.clicked.connect(self._debloat_bg_apps)
+        self.btn_debloat_telemetry.clicked.connect(self._debloat_telemetry)
+        self.btn_debloat_cortana.clicked.connect(self._debloat_cortana)
+        self.btn_debloat_revert.clicked.connect(self._debloat_revert)
+
+        # advanced tools: UI tweaks
+        self.btn_ui_disable_bing.clicked.connect(self._ui_disable_bing)
+        self.btn_ui_disable_widgets.clicked.connect(self._ui_disable_widgets)
+        self.btn_ui_disable_chat.clicked.connect(self._ui_disable_chat)
+        self.btn_ui_explorer_thispc.clicked.connect(self._ui_explorer_thispc)
+        self.btn_ui_show_ext.clicked.connect(self._ui_show_ext)
+        self.btn_ui_restore_ui.clicked.connect(self._ui_restore_ui)
+
+        # advanced tools: Backup
+        self.btn_backup_create.clicked.connect(self._backup_create)
+        self.btn_backup_restore.clicked.connect(self._backup_restore)
+        self.btn_backup_open.clicked.connect(self._backup_open)
+
+    # ----------------------------------------
+    # EXISTING LOGIC
+    # ----------------------------------------
     def _scan(self):
         self.spinner.show()
         self.log.clear()
         self.log.append(self.opt.quick_scan())
         self.spinner.hide()
 
+    def _clean(self):
+        n = self.opt.cleanup_temp_files()
+        self.log.append(f"[Cleanup] Removed ~{n} files.")
+
+    def _deep_clean(self):
+        n = self.opt.deep_cleanup()
+        self.log.append(f"[Deep Cleanup] Removed {n} items.")
+
+    def _restore(self):
+        ok, msg = self.opt.create_restore_point("QrsTweaks Restore")
+        self.log.append(f"[Restore] {msg}")
+
     def _plan(self):
         ok, msg = self.opt.create_high_perf_powerplan()
         self.log.append(f"[Power] {msg}")
 
-    def _clean(self):
-        n = self.opt.cleanup_temp_files()
-        self.log.append(f"[Cleanup] Removed ~{n} temp files.")
+    def _ml_start(self):
+        ok, msg = self.opt.start_memleak_protector(
+            process_names=["FortniteClient-Win64-Shipping.exe"], mb_threshold=1024
+        )
+        self.log.append(f"[MemLeak] {msg}")
 
-    def _restore(self):
-        ok, msg = self.opt.create_restore_point("QrsTweaks Snapshot")
-        self.log.append(f"[Restore] {msg}")
+    def _ml_stop(self):
+        ok, msg = self.opt.stop_memleak_protector()
+        self.log.append(f"[MemLeak] {msg}")
 
-    # ---------- Deep cleanup ----------
-    def _deep_browsers(self):
-        ok, msg = self.opt.cleanup_browser_caches()
-        self.log.append(f"[DeepClean] {msg}")
+    def _dns(self, p, s):
+        ok, msg = self.opt.set_dns(p, s)
+        self.log.append(f"[DNS] {msg}")
 
-    def _deep_prefetch(self):
-        ok, msg = self.opt.cleanup_prefetch_and_logs()
-        self.log.append(f"[DeepClean] {msg}")
+    def _ctcp(self, enable):
+        ok, msg = self.opt.enable_ctcp(enable)
+        self.log.append(f"[CTCP] {msg}")
 
-    def _deep_winold(self):
-        ok, msg = self.opt.cleanup_windows_old()
-        self.log.append(f"[DeepClean] {msg}")
+    def _autotune(self, level):
+        ok, msg = self.opt.autotuning(level)
+        self.log.append(f"[TCP] {msg}")
 
-    def _deep_full(self):
-        ok, msg = self.opt.cleanup_deep()
-        self.log.append(f"[DeepClean]\n{msg}")
+    def _nagle_off(self):
+        ok, msg = self.opt.toggle_nagle(False)
+        self.log.append(f"[Nagle] {msg}")
 
-    # ---------- Storage (threaded) ----------
-    def _analyze_files_threaded(self):
-        self.btn_analyze_files.setEnabled(False)
-        self.log.append("[Storage] Analyzing largest files...")
-        t = _ScanThread(self.opt.analyze_largest_files, limit=25)
-        t.finished_text.connect(lambda text: self.log.append(text))
-        t.failed_text.connect(lambda text: self.log.append("[Storage] File analysis failed:\n" + text))
-        t.finished.connect(lambda: self.btn_analyze_files.setEnabled(True))
-        t.finished.connect(lambda: self._threads.remove(t) if t in self._threads else None)
-        self._threads.append(t)
-        t.start()
+    def _ping(self):
+        ok, out = self.opt.latency_ping("1.1.1.1", 5)
+        self.log.append(out)
 
-    def _analyze_dirs_threaded(self):
-        self.btn_analyze_dirs.setEnabled(False)
-        self.log.append("[Storage] Analyzing top directories...")
-        t = _ScanThread(self.opt.analyze_top_dirs, limit=10)
-        t.finished_text.connect(lambda text: self.log.append(text))
-        t.failed_text.connect(lambda text: self.log.append("[Storage] Directory analysis failed:\n" + text))
-        t.finished.connect(lambda: self.btn_analyze_dirs.setEnabled(True))
-        t.finished.connect(lambda: self._threads.remove(t) if t in self._threads else None)
-        self._threads.append(t)
-        t.start()
-
-    # ---------- Storage (sync) ----------
-    def _ssd_trim(self):
-        ok, msg = self.opt.optimize_ssd_trim()
-        self.log.append(f"[Storage] {msg}")
-
-    def _hdd_defrag(self):
-        ok, msg = self.opt.optimize_hdd_defrag()
-        self.log.append(f"[Storage] {msg}")
-
-    def _winupdate_cleanup(self):
-        ok, msg = self.opt.cleanup_windows_updates()
-        self.log.append(f"[Storage] {msg}")
-
-    def _drive_health(self):
-        ok, msg = self.opt.check_drive_health()
-        self.log.append(msg)
-
-    # ---------- System Optimization ----------
-    def _apply_tweaks(self):
-        ok, msg = self.opt.apply_system_tweaks()
-        self.log.append("[SystemTweaks] " + msg)
-
-    def _revert_tweaks(self):
-        ok, msg = self.opt.revert_system_defaults()
-        self.log.append("[SystemTweaks] " + msg)
-
-    def _apply_gaming(self):
-        ok, msg = self.opt.apply_gaming_mode()
-        self.log.append("[GamingMode] " + msg)
-
-    def _revert_gaming(self):
-        ok, msg = self.opt.revert_normal_mode()
-        self.log.append("[GamingMode] " + msg)
-
-    # ---------- Startup Apps ----------
     def _startup_list(self):
-        ok, msg = self.opt.list_startup_entries_detailed()
+        items = self.opt.list_startup_entries()
+        if not items:
+            self.log.append("No startup entries found.")
+            return
+        self.log.append("Startup Entries:")
+        for loc, name, val in items:
+            self.log.append(f"- {name} → {val}")
+
+    # ----- STORAGE ANALYZER -----
+    def _analyze_drive(self):
+        result = self.opt.analyze_drive()
+        self.log.append(result)
+
+    def _top25(self):
+        result = self.opt.analyze_top25()
+        self.log.append(result)
+
+    def _top_dirs(self):
+        result = self.opt.analyze_top_dirs()
+        self.log.append(result)
+
+    def _clear_cache(self):
+        result = self.opt.clear_cache()
+        self.log.append(result)
+
+    # ----- PROFILE MANAGER: BUILT-IN PROFILES -----
+    def _apply_profile(self, name: str):
+        msgs = []
+
+        if name == "gaming":
+            ok, m = self.opt.create_high_perf_powerplan()
+            msgs.append(f"[Power] {m}")
+
+            ok, m = self.opt.set_dns("1.1.1.1", "1.0.0.1")
+            msgs.append(f"[DNS] {m}")
+
+            ok, m = self.opt.enable_ctcp(True)
+            msgs.append(f"[CTCP] {m}")
+
+            ok, m = self.opt.autotuning("restricted")
+            msgs.append(f"[TCP] {m}")
+
+            ok, m = self.opt.toggle_nagle(False)
+            msgs.append(f"[Nagle] {m}")
+
+            header = "[Profile] Applied Gaming preset"
+
+        elif name == "productivity":
+            ok, m = self.opt.autotuning("normal")
+            msgs.append(f"[TCP] {m}")
+
+            ok, m = self.opt.enable_ctcp(False)
+            msgs.append(f"[CTCP] {m}")
+
+            try:
+                ok, m = self.opt.toggle_nagle(True)
+                msgs.append(f"[Nagle] {m}")
+            except TypeError:
+                msgs.append("[Nagle] Left at current setting (backend toggle is one-way)")
+
+            header = "[Profile] Applied Productivity preset"
+
+        elif name == "streaming":
+            ok, m = self.opt.create_high_perf_powerplan()
+            msgs.append(f"[Power] {m}")
+
+            ok, m = self.opt.autotuning("normal")
+            msgs.append(f"[TCP] {m}")
+
+            ok, m = self.opt.enable_ctcp(True)
+            msgs.append(f"[CTCP] {m}")
+
+            header = "[Profile] Applied Streaming preset"
+
+        else:
+            self.log.append(f"[Profile] Unknown profile '{name}'")
+            return
+
+        self.log.append(header)
+        for line in msgs:
+            self.log.append("  " + line)
+
+    # ----- PROFILE MANAGER: EXPORT / IMPORT -----
+    def _save_profile(self):
+        """
+        Export current system-oriented state to a .qrsp JSON file.
+        """
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save QrsTweaks Profile",
+            "profile.qrsp",
+            "QrsTweaks Profile (*.qrsp);;JSON Files (*.json);;All Files (*.*)",
+        )
+        if not path:
+            self.log.append("[Profile] Save cancelled.")
+            return
+
+        ok, msg = self.opt.export_profile(path)
+        if ok:
+            self.log.append(f"[Profile] Saved to {path}")
+        else:
+            self.log.append(f"[Profile] Save failed: {msg}")
+
+    def _load_profile(self):
+        """
+        Import a .qrsp JSON file and apply it.
+        """
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load QrsTweaks Profile",
+            "",
+            "QrsTweaks Profile (*.qrsp);;JSON Files (*.json);;All Files (*.*)",
+        )
+        if not path:
+            self.log.append("[Profile] Load cancelled.")
+            return
+
+        ok, msg = self.opt.import_profile(path)
         self.log.append(msg)
 
-    def _startup_disable_auto(self):
-        ok, msg = self.opt.disable_startup_auto()
-        self.log.append("[Startup] " + msg)
-
-    def _startup_enable_disabled(self):
-        ok, msg = self.opt.enable_startup_disabled()
-        self.log.append("[Startup] " + msg)
-
-    def _startup_remove_disabled(self):
-        ok, msg = self.opt.remove_startup_disabled()
-        self.log.append("[Startup] " + msg)
-
-    # ---------- Background Services ----------
-    def _services_list_heavy(self):
-        ok, msg = self.opt.list_heavy_services()
+    # ----- ADVANCED TOOLS: REPAIR OPS -----
+    def _repair_wu(self):
+        ok, msg = self.opt.repair_windows_update()
         self.log.append(msg)
 
-    def _services_disable_non(self):
-        ok, msg = self.opt.disable_non_essential_services()
-        self.log.append("[Service] " + msg)
+    def _reset_net(self):
+        ok, msg = self.opt.reset_network_stack()
+        self.log.append(msg)
 
-    def _services_restore_defaults(self):
-        ok, msg = self.opt.restore_default_services()
-        self.log.append("[Service] " + msg)
+    def _run_dism_sfc(self):
+        ok, msg = self.opt.run_dism_sfc()
+        self.log.append(msg)
+
+    def _reset_store_cache(self):
+        ok, msg = self.opt.reset_store_cache()
+        self.log.append(msg)
+
+    # ----- ADVANCED TOOLS: DEBLOAT -----
+    def _debloat_xbox(self):
+        ok, msg = self.opt.debloat_xbox_gamebar()
+        self.log.append(msg)
+
+    def _debloat_bg_apps(self):
+        ok, msg = self.opt.debloat_background_apps()
+        self.log.append(msg)
+
+    def _debloat_telemetry(self):
+        ok, msg = self.opt.debloat_telemetry_safe()
+        self.log.append(msg)
+
+    def _debloat_cortana(self):
+        ok, msg = self.opt.debloat_cortana_search()
+        self.log.append(msg)
+
+    def _debloat_revert(self):
+        ok, msg = self.opt.debloat_revert_safe()
+        self.log.append(msg)
+
+    # ----- ADVANCED TOOLS: UI TWEAKS -----
+    def _ui_disable_bing(self):
+        ok, msg = self.opt.ui_disable_bing_search()
+        self.log.append(msg)
+
+    def _ui_disable_widgets(self):
+        ok, msg = self.opt.ui_hide_widgets()
+        self.log.append(msg)
+
+    def _ui_disable_chat(self):
+        ok, msg = self.opt.ui_hide_chat_icon()
+        self.log.append(msg)
+
+    def _ui_explorer_thispc(self):
+        ok, msg = self.opt.ui_explorer_this_pc()
+        self.log.append(msg)
+
+    def _ui_show_ext(self):
+        ok, msg = self.opt.ui_show_file_extensions()
+        self.log.append(msg)
+
+    def _ui_restore_ui(self):
+        ok, msg = self.opt.ui_restore_defaults()
+        self.log.append(msg)
+
+    # ----- ADVANCED TOOLS: BACKUP & RESTORE -----
+    def _backup_create(self):
+        ok, msg = self.opt.create_backup_snapshot()
+        self.log.append(msg)
+
+    def _backup_restore(self):
+        ok, msg = self.opt.restore_latest_backup()
+        self.log.append(msg)
+
+    def _backup_open(self):
+        ok, msg = self.opt.open_backup_folder()
+        self.log.append(msg)

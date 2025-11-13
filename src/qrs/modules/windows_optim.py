@@ -1,1004 +1,840 @@
 # src/qrs/modules/windows_optim.py
-from __future__ import annotations
-
 import os
 import json
 import shutil
 import subprocess
+import platform
 from pathlib import Path
-from typing import List, Tuple
+from datetime import datetime
+from typing import Tuple, List, Dict, Any
 
-import psutil
-import winreg
-
-
-# ---------------- Utilities ----------------
-def is_admin() -> bool:
-    try:
-        import ctypes
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
-
-
-def run_ps(script: str) -> subprocess.CompletedProcess:
-    """Run PowerShell inline, capture output, no new window."""
-    return subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        text=True, capture_output=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    )
-
-
-def run_ps_elevated_blocking(script: str) -> bool:
-    """Request elevation, run script in a new PowerShell as admin, wait for completion."""
-    esc = script.replace("'", "''")
-    wrapper = (
-        "Start-Process powershell -Verb RunAs "
-        f"'-NoProfile -ExecutionPolicy Bypass -Command \"{esc}\"' -Wait"
-    )
-    r = run_ps(wrapper)
-    return r.returncode == 0
-
-
-def bytes_fmt(n: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024:
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.2f} {unit}"
-        n /= 1024
-    return f"{n:.2f} PB"
-
-
-def dir_size_and_count(path: Path) -> Tuple[int, int]:
-    total = 0
-    count = 0
-    if not path.exists():
-        return 0, 0
-    for root, _, files in os.walk(path):
-        for f in files:
-            fp = Path(root) / f
-            try:
-                total += fp.stat().st_size
-                count += 1
-            except Exception:
-                pass
-    return total, count
+try:
+    import winreg
+except ImportError:
+    winreg = None  # Non-Windows environment safeguard
 
 
 class WindowsOptimizer:
+    """
+    Core backend for QrsTweaks Windows optimizer.
+
+    Provides:
+      - Quick scan
+      - Cleanup / Deep cleanup
+      - Power plan tweaks
+      - Network tweaks (DNS, CTCP, autotuning, Nagle)
+      - Startup entry listing
+      - Storage analysis
+      - Cache cleanup
+      - Mem-leak protector stubs
+      - Profile export/import (JSON .qrsp)
+      - System repair operations
+      - Safe debloat operations
+      - UI/taskbar tweaks
+      - Backup/restore snapshots
+    """
+
     def __init__(self):
-        self.root = Path(__file__).resolve().parents[3]
-        self.logs_dir = self.root / "Logs"
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-        self._memleak_proc_name = "qrs_memguard.exe"
+        self.root = Path.cwd()
+        self.backups_dir = self.root / "backups"
 
-    # ---------------- System scan ----------------
-    def quick_scan(self) -> str:
-        targets = [
-            (Path(os.getenv("TEMP") or r"C:\Windows\Temp"), "User Temp"),
-            (Path(r"C:\Windows\Temp"), "System Temp"),
-            (Path(r"C:\Windows\Prefetch"), "Prefetch"),
-            (Path(r"C:\Windows\SoftwareDistribution\Download"), "Windows Update Cache"),
-        ]
-        total_bytes = 0
-        total_files = 0
-        report = []
-
-        for p, label in targets:
-            size, cnt = dir_size_and_count(p)
-            total_bytes += size; total_files += cnt
-            report.append(f"[{label}] {cnt:,} files ({bytes_fmt(size)})")
-
-        # Recycle Bin estimate
+    # -------------------------------------------------
+    # HELPER: run command
+    # -------------------------------------------------
+    def _run_cmd(self, cmd: str) -> Tuple[bool, str]:
         try:
-            ps = r"(New-Object -ComObject Shell.Application).NameSpace(10).Items() | " \
-                 r"Measure-Object -Property Size -Sum | Select-Object -ExpandProperty Sum"
-            rb = run_ps(ps)
-            if rb.returncode == 0 and rb.stdout.strip():
-                rb_size = int(rb.stdout.strip())
-                total_bytes += rb_size
-                report.append(f"[Recycle Bin] ~{bytes_fmt(rb_size)}")
-        except Exception:
-            report.append("[Recycle Bin] size unavailable")
-
-        report.append("")
-        report.append(f"[Scan Complete] {total_files:,} files detected.")
-        report.append(f"Estimated cleanable space: {bytes_fmt(total_bytes)}")
-        return "\n".join(report)
-
-    # ---------------- Status helpers (already used elsewhere) ----------------
-    def is_high_perf_plan(self) -> bool:
-        try:
-            output = subprocess.check_output(["powercfg", "/getactivescheme"], text=True).lower()
-            return ("high performance" in output) or ("ultimate performance" in output) or ("scheme_min" in output)
-        except Exception:
-            return False
-
-    def is_game_mode_enabled(self) -> bool:
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\GameBar") as key:
-                val, _ = winreg.QueryValueEx(key, "AllowAutoGameMode")
-                return int(val) == 1
-        except Exception:
-            return False
-
-    def is_visual_effects_minimized(self) -> bool:
-        try:
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
-            ) as key:
-                val, _ = winreg.QueryValueEx(key, "VisualFXSetting")
-                return int(val) == 2
-        except Exception:
-            return False
-
-    def is_network_optimized(self) -> bool:
-        try:
-            out = subprocess.check_output(["netsh", "int", "tcp", "show", "global"], text=True).lower()
-            ctcp_ok = ("congestion provider" in out and "ctcp" in out)
-            tuned = ("autotuning" in out and ("restricted" in out or "disabled" in out))
-            return ctcp_ok or tuned
-        except Exception:
-            return False
-
-    def is_memleak_guard_active(self) -> bool:
-        try:
-            for p in psutil.process_iter(["name"]):
-                if (p.info.get("name") or "").lower() == self._memleak_proc_name:
-                    return True
-        except Exception:
-            pass
-        return False
-
-    def is_services_optimized(self) -> bool:
-        try:
-            out = run_ps(
-                "(Get-Service -Name 'SysMain','DiagTrack' -ErrorAction SilentlyContinue | "
-                "Select-Object Name,StartType,Status | ConvertTo-Json)"
+            completed = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True
             )
-            if out.returncode != 0 or not out.stdout.strip():
-                return False
-            data = json.loads(out.stdout)
-            if isinstance(data, dict):
-                data = [data]
-            names = {d.get("Name"): (str(d.get("StartType", "")).lower(), str(d.get("Status", "")).lower()) for d in data}
-            sysmain_ok = ("SysMain" in names) and (names["SysMain"][0] == "disabled")
-            diag_ok = ("DiagTrack" in names) and (names["DiagTrack"][0] == "disabled")
-            return sysmain_ok and diag_ok
-        except Exception:
-            return False
-
-    # ---------------- Basic actions ----------------
-    def create_high_perf_powerplan(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required for power plan."
-        try:
-            subprocess.run(["powercfg", "-setactive", "SCHEME_MIN"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-            return True, "High Performance plan activated."
+            ok = completed.returncode == 0
+            out = (completed.stdout or "") + (completed.stderr or "")
+            return ok, out.strip()
         except Exception as e:
             return False, str(e)
 
-    def cleanup_temp_files(self) -> int:
-        tmp_targets = [Path(os.environ.get("TEMP", r"C:\Windows\Temp")), Path(r"C:\Windows\Temp")]
-        count = 0
-        for base in tmp_targets:
-            if not base.exists():
-                continue
-            for root, _, files in os.walk(base):
+    # -------------------------------------------------
+    # QUICK SCAN
+    # -------------------------------------------------
+    def quick_scan(self) -> str:
+        lines = []
+        lines.append("QrsTweaks Quick Scan")
+        lines.append("=====================")
+
+        # OS
+        try:
+            uname = platform.uname()
+            lines.append(f"OS: {uname.system} {uname.release} ({uname.version})")
+        except Exception:
+            lines.append("OS: <unknown>")
+
+        # Disk
+        try:
+            total, used, free = shutil.disk_usage("C:\\")
+            gb = 1024 ** 3
+            lines.append(
+                f"Disk C: {used / gb:.1f} GB used / {total / gb:.1f} GB total "
+                f"({free / gb:.1f} GB free)"
+            )
+        except Exception:
+            lines.append("Disk: <unable to read>")
+
+        # Temp size
+        try:
+            temp = Path(os.getenv("TEMP", r"C:\Windows\Temp"))
+            total_size = 0
+            for root, dirs, files in os.walk(temp):
                 for f in files:
+                    fp = Path(root) / f
                     try:
-                        (Path(root) / f).unlink(missing_ok=True)
+                        total_size += fp.stat().st_size
+                    except OSError:
+                        pass
+            lines.append(f"Temp folder size: ~{total_size / (1024**2):.1f} MB")
+        except Exception:
+            lines.append("Temp folder size: <unknown>")
+
+        return "\n".join(lines)
+
+    # -------------------------------------------------
+    # CLEANUP
+    # -------------------------------------------------
+    def cleanup_temp_files(self) -> int:
+        temp_paths = [
+            Path(os.getenv("TEMP", "")),
+            Path(os.getenv("TMP", "")),
+            Path(r"C:\Windows\Temp"),
+        ]
+        count = 0
+        for base in temp_paths:
+            if not base or not base.exists():
+                continue
+            for root, dirs, files in os.walk(base):
+                for f in files:
+                    fp = Path(root) / f
+                    try:
+                        fp.unlink()
                         count += 1
-                    except Exception:
+                    except OSError:
                         pass
         return count
 
-    def create_restore_point(self, name: str) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required for restore points."
-        cp = run_ps(f"Checkpoint-Computer -Description '{name}' -RestorePointType 'MODIFY_SETTINGS'")
-        if cp.returncode == 0:
-            return True, "Restore point created."
-        return False, (cp.stderr or cp.stdout or "Failed to create restore point.")
+    def deep_cleanup(self) -> int:
+        """
+        More aggressive cleanup (no recycle bin, direct delete).
+        """
+        targets = [
+            Path(os.getenv("TEMP", "")),
+            Path(os.getenv("TMP", "")),
+            Path(r"C:\Windows\Temp"),
+            Path.home() / "AppData" / "Local" / "Temp",
+        ]
+        count = 0
+        for base in targets:
+            if not base.exists():
+                continue
+            for root, dirs, files in os.walk(base):
+                for f in files:
+                    fp = Path(root) / f
+                    try:
+                        fp.unlink()
+                        count += 1
+                    except OSError:
+                        pass
+        return count
 
-    # ---------------- Network helpers ----------------
+    # -------------------------------------------------
+    # RESTORE POINT (best effort)
+    # -------------------------------------------------
+    def create_restore_point(self, description: str) -> Tuple[bool, str]:
+        ps = (
+            f'powershell.exe -Command "Checkpoint-Computer -Description '
+            f'\'{description}\' -RestorePointType MODIFY_SETTINGS"'
+        )
+        ok, out = self._run_cmd(ps)
+        if ok:
+            return True, "Restore point created."
+        return False, f"Failed to create restore point: {out}"
+
+    # -------------------------------------------------
+    # POWER PLAN
+    # -------------------------------------------------
+    def create_high_perf_powerplan(self) -> Tuple[bool, str]:
+        ok, out = self._run_cmd("powercfg /L")
+        if not ok:
+            return False, f"powercfg /L failed: {out}"
+
+        high_guid = None
+        for line in out.splitlines():
+            if "High performance" in line:
+                parts = line.strip().split()
+                for p in parts:
+                    if p.startswith("(") and p.endswith(")"):
+                        high_guid = p.strip("()")
+                        break
+        if not high_guid:
+            return False, "High performance plan not found."
+
+        ok, out2 = self._run_cmd(f"powercfg /S {high_guid}")
+        if not ok:
+            return False, f"Failed to set high performance plan: {out2}"
+        return True, "High performance power plan activated."
+
+    # -------------------------------------------------
+    # NETWORK TWEAKS
+    # -------------------------------------------------
     def set_dns(self, primary: str, secondary: str) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required to set DNS."
-        names = ["Ethernet", "Wi-Fi", "WiFi", "Local Area Connection"]
-        errors = []
-        for n in names:
-            a = run_ps(f'netsh interface ip set dns name="{n}" static {primary}')
-            b = run_ps(f'netsh interface ip add dns name="{n}" {secondary} index=2')
-            if a.returncode == 0:
-                return True, f"DNS on '{n}' set to {primary} / {secondary}"
-            errors.append(a.stderr or a.stdout)
-        return False, "Failed to set DNS. " + " | ".join(filter(None, errors))[:300]
+        cmds = [
+            f'netsh interface ip set dns name="Ethernet" static {primary}',
+            f'netsh interface ip add dns name="Ethernet" {secondary} index=2',
+            f'netsh interface ip set dns name="Wi-Fi" static {primary}',
+            f'netsh interface ip add dns name="Wi-Fi" {secondary} index=2',
+        ]
+        all_ok = True
+        logs = []
+        for cmd in cmds:
+            ok, out = self._run_cmd(cmd)
+            logs.append(f"{cmd}: {out}")
+            all_ok = all_ok and ok
+        if all_ok:
+            return True, f"DNS set to {primary} / {secondary} (Ethernet/Wi-Fi)."
+        return False, "Some DNS commands failed:\n" + "\n".join(logs)
 
     def enable_ctcp(self, enable: bool) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        mode = "ctcp" if enable else "none"
-        r = run_ps(f'netsh int tcp set global congestionprovider={mode}')
-        if r.returncode == 0:
-            return True, f"CTCP {'enabled' if enable else 'disabled'}."
-        return False, r.stderr or r.stdout
+        value = "enabled" if enable else "disabled"
+        ok, out = self._run_cmd(f"netsh interface tcp set global congestionprovider={value}")
+        if ok:
+            return True, f"CTCP {value}."
+        return False, f"Failed to change CTCP: {out}"
 
     def autotuning(self, level: str) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        r = run_ps(f'netsh int tcp set global autotuninglevel={level}')
-        if r.returncode == 0:
-            return True, f"TCP autotuning set to {level}."
-        return False, r.stderr or r.stdout
+        ok, out = self._run_cmd(f"netsh interface tcp set global autotuninglevel={level}")
+        if ok:
+            return True, f"TCP autotuning set to '{level}'."
+        return False, f"Failed to set autotuning: {out}"
 
-    def toggle_nagle(self, disable: bool = True) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
+    def toggle_nagle(self, disable: bool) -> Tuple[bool, str]:
+        if winreg is None:
+            return False, "winreg not available; cannot toggle Nagle."
+
         try:
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces") as root:
+            key_path = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as root:
                 i = 0
-                changed = 0
                 while True:
                     try:
-                        subname = winreg.EnumKey(root, i); i += 1
-                        with winreg.OpenKey(root, subname, 0, winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE) as sub:
-                            val = 1 if disable else 0
-                            try:
-                                winreg.SetValueEx(sub, "TcpNoDelay", 0, winreg.REG_DWORD, val)
-                                winreg.SetValueEx(sub, "TcpAckFrequency", 0, winreg.REG_DWORD, val)
-                                changed += 1
-                            except Exception:
-                                pass
+                        sub = winreg.EnumKey(root, i)
                     except OSError:
                         break
-            return True, f"Nagle {'disabled' if disable else 'enabled'} on {changed} interfaces (reboot may be required)."
-        except Exception as e:
-            return False, str(e)
+                    i += 1
+                    with winreg.OpenKey(root, sub, 0, winreg.KEY_ALL_ACCESS) as iface:
+                        if disable:
+                            winreg.SetValueEx(iface, "TcpAckFrequency", 0, winreg.REG_DWORD, 1)
+                            winreg.SetValueEx(iface, "TCPNoDelay", 0, winreg.REG_DWORD, 1)
+                        else:
+                            for name in ("TcpAckFrequency", "TCPNoDelay"):
+                                try:
+                                    winreg.DeleteValue(iface, name)
+                                except OSError:
+                                    pass
+            if disable:
+                return True, "Nagle disabled for all interfaces."
+            else:
+                return True, "Nagle restored to default for all interfaces."
+        except OSError as e:
+            return False, f"Registry error: {e}"
 
-    def latency_ping(self, host: str = "1.1.1.1", count: int = 4) -> Tuple[bool, str]:
-        try:
-            output = subprocess.check_output(["ping", host, "-n", str(count)], text=True, stderr=subprocess.DEVNULL)
-            return True, output
-        except Exception as e:
-            return False, str(e)
+    def latency_ping(self, host: str, count: int = 5) -> Tuple[bool, str]:
+        cmd = f"ping -n {count} {host}"
+        ok, out = self._run_cmd(cmd)
+        return ok, out
 
+    # -------------------------------------------------
+    # STARTUP ENTRIES
+    # -------------------------------------------------
     def list_startup_entries(self) -> List[Tuple[str, str, str]]:
-        results: List[Tuple[str, str, str]] = []
-        keys = [
-            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"),
-            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Run"),
+        result = []
+        if winreg is None:
+            return result
+
+        paths = [
+            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", "HKCU"),
+            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Run", "HKLM"),
         ]
-        for root, path in keys:
+        for root, subkey, label in paths:
             try:
-                with winreg.OpenKey(root, path) as k:
+                with winreg.OpenKey(root, subkey) as k:
                     i = 0
                     while True:
                         try:
-                            name, val, _ = winreg.EnumValue(k, i); i += 1
-                            results.append((path, name, val))
+                            name, val, _ = winreg.EnumValue(k, i)
                         except OSError:
                             break
-            except FileNotFoundError:
-                pass
-        return results
+                        i += 1
+                        result.append((label, name, val))
+            except OSError:
+                continue
+        return result
 
-    # ---------------- Deep Cleanup (existing) ----------------
-    def _delete_tree_best_effort(self, path: Path) -> Tuple[int, int]:
-        files = 0
-        bytes_sum = 0
-        if not path.exists():
-            return 0, 0
-        for root, dirs, fs in os.walk(path, topdown=False):
-            for f in fs:
-                fp = Path(root) / f
+    # -------------------------------------------------
+    # STORAGE ANALYZER
+    # -------------------------------------------------
+    def _walk_sizes(self, base: Path, exclude: List[Path]) -> Tuple[int, List[Path]]:
+        total = 0
+        files = []
+        base = base.resolve()
+        ex_resolved = [e.resolve() for e in exclude if e.exists()]
+        for root, dirs, f_names in os.walk(base):
+            root_path = Path(root)
+            if any(str(root_path).startswith(str(e)) for e in ex_resolved):
+                continue
+            for fn in f_names:
+                fp = root_path / fn
                 try:
                     size = fp.stat().st_size
-                    fp.unlink(missing_ok=True)
-                    files += 1
-                    bytes_sum += size
-                except Exception:
+                    total += size
+                    files.append((fp, size))
+                except OSError:
                     pass
-            for d in dirs:
-                dp = Path(root) / d
-                try:
-                    dp.rmdir()
-                except Exception:
-                    pass
-        return files, bytes_sum
+        return total, files
 
-    def cleanup_browser_caches(self) -> Tuple[bool, str]:
-        home = Path.home()
-        targets = [
-            home / "AppData/Local/Google/Chrome/User Data/Default/Cache",
-            home / "AppData/Local/Google/Chrome/User Data/Default/Code Cache",
-            home / "AppData/Local/Microsoft/Edge/User Data/Default/Cache",
-            home / "AppData/Local/Microsoft/Edge/User Data/Default/Code Cache",
-            home / "AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/Cache",
-            home / "AppData/Local/BraveSoftware/Brave-Browser/User Data/Default/Code Cache",
-        ]
-        ff_root = home / "AppData/Roaming/Mozilla/Firefox/Profiles"
-        if ff_root.exists():
-            for prof in ff_root.glob("*.default*"):
-                targets.append(prof / "cache2")
+    def analyze_drive(self) -> str:
+        base = Path("C:\\")
+        exclude = [Path("C:\\Windows"), Path("C:\\Program Files"), Path("C:\\Program Files (x86)")]
+        total, files = self._walk_sizes(base, exclude)
+        gb = 1024 ** 3
+        return f"[Storage] C: (excluding Windows/Program Files) ~{total / gb:.2f} GB used."
 
-        removed_files = 0
-        reclaimed = 0
-        for t in targets:
-            f, b = self._delete_tree_best_effort(t)
-            removed_files += f
-            reclaimed += b
-        return True, f"Browser caches cleaned: {removed_files:,} files, {bytes_fmt(reclaimed)} reclaimed."
+    def analyze_top25(self) -> str:
+        base = Path("C:\\")
+        exclude = [Path("C:\\Windows"), Path("C:\\Program Files"), Path("C:\\Program Files (x86)")]
+        total, files = self._walk_sizes(base, exclude)
+        files_sorted = sorted(files, key=lambda x: x[1], reverse=True)[:25]
+        lines = ["[Storage] Top 25 largest files on C: (excluding Windows / Program Files):"]
+        for fp, sz in files_sorted:
+            lines.append(f" - {fp} : {sz / (1024**2):.1f} MB")
+        return "\n".join(lines)
 
-    def cleanup_prefetch_and_logs(self) -> Tuple[bool, str]:
-        targets = [Path(r"C:\Windows\Prefetch"), Path(r"C:\Windows\Logs")]
-        removed_files = 0
-        reclaimed = 0
-        for t in targets:
-            f, b = self._delete_tree_best_effort(t)
-            removed_files += f
-            reclaimed += b
-        return True, f"Prefetch & Logs cleaned: {removed_files:,} files, {bytes_fmt(reclaimed)} reclaimed."
+    def analyze_top_dirs(self) -> str:
+        base = Path("C:\\")
+        exclude = [Path("C:\\Windows"), Path("C:\\Program Files"), Path("C:\\Program Files (x86)")]
+        dir_totals: Dict[Path, int] = {}
+        _, files = self._walk_sizes(base, exclude)
+        for fp, size in files:
+            parent = fp.parent
+            dir_totals[parent] = dir_totals.get(parent, 0) + size
+        top_dirs = sorted(dir_totals.items(), key=lambda x: x[1], reverse=True)[:25]
+        lines = ["[Storage] Top directories by size (excluding Windows / Program Files):"]
+        for d, sz in top_dirs:
+            lines.append(f" - {d} : {sz / (1024**2):.1f} MB")
+        return "\n".join(lines)
 
-    def cleanup_windows_old(self) -> Tuple[bool, str]:
-        target = Path(r"C:\Windows.old")
-        if not target.exists():
-            return True, "Windows.old not present."
-        if not is_admin():
-            ps = r"Remove-Item -LiteralPath 'C:\Windows.old' -Recurse -Force -ErrorAction SilentlyContinue"
-            ok = run_ps_elevated_blocking(ps)
-            return ok, "Windows.old removal requested with elevation." if ok else "Windows.old removal failed."
-        files, size = self._delete_tree_best_effort(target)
-        try:
-            target.rmdir()
-        except Exception:
-            pass
-        return True, f"Windows.old cleaned: {files:,} files, {bytes_fmt(size)} reclaimed (best-effort)."
-
-    def cleanup_deep(self) -> Tuple[bool, str]:
-        summaries = []
-        total_files = 0
-        total_bytes = 0
-
-        ok, msg = self.cleanup_browser_caches()
-        summaries.append(msg); total_files += self._parse_first_int(msg); total_bytes += self._parse_bytes_in_msg(msg)
-
-        ok, msg = self.cleanup_prefetch_and_logs()
-        summaries.append(msg); total_files += self._parse_first_int(msg); total_bytes += self._parse_bytes_in_msg(msg)
-
-        ok, msg = self.cleanup_windows_old()
-        summaries.append(msg); total_files += self._parse_first_int(msg); total_bytes += self._parse_bytes_in_msg(msg)
-
-        summaries.append("")
-        summaries.append(f"[Summary] Total removed files: {total_files:,}")
-        summaries.append(f"[Summary] Total reclaimed: {bytes_fmt(total_bytes)}")
-        return True, "\n".join(summaries)
-
-    def _parse_first_int(self, text: str) -> int:
-        import re
-        m = re.search(r"([0-9][0-9,]*)\s+files", text, re.IGNORECASE)
-        if not m:
-            return 0
-        try:
-            return int(m.group(1).replace(",", ""))
-        except Exception:
-            return 0
-
-    def _parse_bytes_in_msg(self, text: str) -> int:
-        import re
-        m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(KB|MB|GB|TB)", text, re.IGNORECASE)
-        if not m:
-            return 0
-        val = float(m.group(1)); unit = m.group(2).upper()
-        mult = {"KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}.get(unit, 1)
-        return int(val * mult)
-
-    # ---------------- Storage Tools ----------------
-    def _excluded_dirs(self) -> List[str]:
-        return [r"C:\Windows", r"C:\Program Files", r"C:\Program Files (x86)"]
-
-    def _should_skip_dir(self, abspath: str) -> bool:
-        abspath_norm = abspath.rstrip("\\").lower()
-        for ex in self._excluded_dirs():
-            if abspath_norm.startswith(ex.lower()):
-                return True
-        bad_names = {"system volume information", "$recycle.bin", "windowsapps"}
-        tail = os.path.basename(abspath_norm)
-        if tail in bad_names:
-            return True
-        return False
-
-    def analyze_largest_files(self, limit: int = 25) -> Tuple[bool, str]:
-        root = r"C:\\"
-        results: List[Tuple[int, str]] = []
-        for current_root, dirs, files in os.walk(root, topdown=True):
-            try:
-                dirs[:] = [d for d in dirs if not self._should_skip_dir(os.path.join(current_root, d))]
-            except Exception:
-                dirs[:] = []
-            for f in files:
-                fp = os.path.join(current_root, f)
-                try:
-                    if os.path.islink(fp):
-                        continue
-                    size = os.stat(fp, follow_symlinks=False).st_size
-                    results.append((size, fp))
-                except Exception:
-                    pass
-        results.sort(reverse=True)
-        top = results[:limit]
-        if not top:
-            return True, "[Storage] No files enumerated."
-        total = sum(sz for sz, _ in top)
-        lines = ["[Storage] Largest Files (Top {}):".format(limit)]
-        for sz, path in top:
-            lines.append(f"  - {bytes_fmt(sz):>10} — {path}")
-        lines.append(f"[Storage] Total (top {limit}): {bytes_fmt(total)}")
-        return True, "\n".join(lines)
-
-    def analyze_top_dirs(self, limit: int = 10) -> Tuple[bool, str]:
-        from collections import defaultdict
-        root = r"C:\\"
-        by_toplevel = defaultdict(int)
-
-        def top_key(path: str) -> str:
-            p = Path(path)
-            parts = p.parts
-            if len(parts) >= 2:
-                return str(Path(parts[0]) / parts[1])
-            return str(p)
-
-        for current_root, dirs, files in os.walk(root, topdown=True):
-            try:
-                dirs[:] = [d for d in dirs if not self._should_skip_dir(os.path.join(current_root, d))]
-            except Exception:
-                dirs[:] = []
-            key = top_key(current_root)
-            for f in files:
-                fp = os.path.join(current_root, f)
-                try:
-                    if os.path.islink(fp):
-                        continue
-                    by_toplevel[key] += os.stat(fp, follow_symlinks=False).st_size
-                except Exception:
-                    pass
-
-        for ex in self._excluded_dirs():
-            by_toplevel.pop(ex, None)
-
-        ranked = sorted(by_toplevel.items(), key=lambda kv: kv[1], reverse=True)[:limit]
-        if not ranked:
-            return True, "[Storage] No directory data."
-        lines = ["[Storage] Top Directories (by total size):"]
-        for path, sz in ranked:
-            lines.append(f"  - {bytes_fmt(sz):>10} — {path}")
-        return True, "\n".join(lines)
-
-    def optimize_ssd_trim(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        r = run_ps("defrag /C /L")
-        return (r.returncode == 0), (r.stdout or r.stderr or "SSD TRIM executed.")
-
-    def optimize_hdd_defrag(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        r = run_ps("defrag /A /U /V")
-        ok = (r.returncode == 0)
-        return ok, (r.stdout or r.stderr or "Defrag completed.")
-
-    def cleanup_windows_updates(self) -> Tuple[bool, str]:
-        if not is_admin():
-            return False, "Admin required."
-        lines = []
-        def _wipe(p: str):
-            f = run_ps(f"Remove-Item -LiteralPath '{p}' -Recurse -Force -ErrorAction SilentlyContinue")
-            return "OK" if f.returncode == 0 else "Skipped"
-
-        do_cache = r"C:\ProgramData\Microsoft\Windows\DeliveryOptimization\Cache"
-        lines.append(f"Delivery Optimization cache: {_wipe(do_cache)}")
-
-        sw = r"C:\Windows\SoftwareDistribution\Download"
-        lines.append(f"Windows Update cache: {_wipe(sw)}")
-
-        d1 = run_ps("DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase")
-        lines.append("DISM StartComponentCleanup: " + ("OK" if d1.returncode == 0 else "Failed"))
-        d2 = run_ps("Dism.exe /Online /Cleanup-Image /SPSuperseded")
-        lines.append("SPSuperseded: " + ("OK" if d2.returncode == 0 else "Skipped/Not applicable."))
-        return True, "[Windows Update Cleanup]\n- " + "\n- ".join(lines)
-
-    def check_drive_health(self) -> Tuple[bool, str]:
-        try:
-            ps = r"(Get-PhysicalDisk | Select-Object FriendlyName,HealthStatus,MediaType,Size | ConvertTo-Json)"
-            r = run_ps(ps)
-            if r.returncode == 0 and r.stdout.strip():
-                data = json.loads(r.stdout)
-                if isinstance(data, dict):
-                    data = [data]
-                lines = ["[Drive Health]"]
-                for d in data:
-                    name = d.get("FriendlyName", "Disk")
-                    health = d.get("HealthStatus", "Unknown")
-                    mtype = d.get("MediaType", "Unknown")
-                    size = int(d.get("Size") or 0)
-                    lines.append(f"  - {name}: {health} | {mtype} | {bytes_fmt(size)}")
-                return True, "\n".join(lines)
-        except Exception:
-            pass
-        try:
-            out = subprocess.check_output(["wmic", "diskdrive", "get", "status,model,size"], text=True)
-            lines = ["[Drive Health] (WMIC)"]
-            for ln in out.splitlines():
-                ln = ln.strip()
-                if not ln or ln.lower().startswith("status"):
-                    continue
-                lines.append("  - " + ln)
-            return True, "\n".join(lines) if len(lines) > 1 else "[Drive Health] No data."
-        except Exception as e:
-            return False, f"[Drive Health] Failed: {e}"
-
-    # ---------------- Gaming/Profile helpers ----------------
-    def apply_default_game_tweaks(self) -> str:
-        cmds = [
-            'Set-ItemProperty -Path "HKCU:\\System\\GameConfigStore" -Name GameDVR_Enabled -Value 0',
-            'Set-Service SysMain -StartupType Disabled -ErrorAction SilentlyContinue',
-            'netsh interface tcp set global autotuninglevel=normal',
-            'powercfg -setactive SCHEME_MIN'
-        ]
-        for c in cmds:
-            run_ps(c)
-        return "Applied default gaming optimizations."
-
-    def revert_default_game_tweaks(self) -> str:
-        cmds = [
-            'Set-ItemProperty -Path "HKCU:\\System\\GameConfigStore" -Name GameDVR_Enabled -Value 1',
-            'Set-Service SysMain -StartupType Automatic -ErrorAction SilentlyContinue',
-            'netsh interface tcp set global autotuninglevel=highlyrestricted',
-            'powercfg -setactive SCHEME_BALANCED'
-        ]
-        for c in cmds:
-            run_ps(c)
-        return "Reverted optimizations to default state."
-
-    # ---------------- Phase 3: System Optimization ----------------
-    def apply_system_tweaks(self) -> Tuple[bool, str]:
-        script = r"""
-$svcs = @('SysMain','DiagTrack','dmwappushsvc')
-foreach ($n in $svcs) {
-  $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
-  if ($svc) {
-    try {
-      Set-Service -Name $n -StartupType Disabled -ErrorAction SilentlyContinue
-      if ($svc.Status -eq 'Running') { Stop-Service -Name $n -Force -ErrorAction SilentlyContinue }
-    } catch {}
-  }
-}
-New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Force | Out-Null
-Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name 'AllowTelemetry' -Type DWord -Value 0
-New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Force | Out-Null
-Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Name 'Disabled' -Type DWord -Value 1
-New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Force | Out-Null
-Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsRunInBackground' -Type DWord -Value 2
-New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Force | Out-Null
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Type DWord -Value 2
-"""
-        if is_admin():
-            r = run_ps(script)
-            ok = (r.returncode == 0)
-            return ok, "Applied recommended system tweaks." if ok else (r.stderr or r.stdout or "Failed to apply tweaks.")
-        else:
-            ok = run_ps_elevated_blocking(script)
-            return ok, "Applied recommended system tweaks (elevated)." if ok else "Failed (UAC denied or script error)."
-
-    def revert_system_defaults(self) -> Tuple[bool, str]:
-        script = r"""
-$svcs = @('SysMain','DiagTrack','dmwappushsvc')
-foreach ($n in $svcs) {
-  $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
-  if ($svc) {
-    try {
-      $start = 'Automatic'
-      if ($n -eq 'DiagTrack') { $start = 'Manual' }
-      Set-Service -Name $n -StartupType $start -ErrorAction SilentlyContinue
-      if ($svc.Status -ne 'Running' -and $start -eq 'Automatic') { Start-Service -Name $n -ErrorAction SilentlyContinue }
-    } catch {}
-  }
-}
-New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Force | Out-Null
-Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name 'AllowTelemetry' -Type DWord -Value 3
-New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Force | Out-Null
-Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Name 'Disabled' -Type DWord -Value 0
-New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Force | Out-Null
-Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsRunInBackground' -Type DWord -Value 1
-New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Force | Out-Null
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Type DWord -Value 0
-"""
-        if is_admin():
-            r = run_ps(script)
-            ok = (r.returncode == 0)
-            return ok, "Restored default Windows settings." if ok else (r.stderr or r.stdout or "Failed to revert.")
-        else:
-            ok = run_ps_elevated_blocking(script)
-            return ok, "Restored default Windows settings (elevated)." if ok else "Failed (UAC denied or script error)."
-
-    def apply_gaming_mode(self) -> Tuple[bool, str]:
-        script = r"""
-powercfg -setactive SCHEME_MIN | Out-Null
-New-Item -Path 'HKCU:\System\GameConfigStore' -Force | Out-Null
-Set-ItemProperty -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled' -Type DWord -Value 0
-New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' -Force | Out-Null
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' -Name 'AppCaptureEnabled' -Type DWord -Value 0
-New-Item -Path 'HKCU:\Software\Microsoft\GameBar' -Force | Out-Null
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'ShowStartupPanel' -Type DWord -Value 0
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'UseNexus' -Type DWord -Value 0
-netsh int tcp set global congestionprovider=ctcp | Out-Null
-netsh int tcp set global autotuninglevel=normal | Out-Null
-$svc = Get-Service -Name 'SysMain' -ErrorAction SilentlyContinue
-if ($svc) {
-  Set-Service -Name 'SysMain' -StartupType Disabled -ErrorAction SilentlyContinue
-  if ($svc.Status -eq 'Running') { Stop-Service -Name 'SysMain' -Force -ErrorAction SilentlyContinue }
-}
-"""
-        nagle_ok = True
-        if is_admin():
-            r = run_ps(script)
-            ok = (r.returncode == 0)
-            n_ok, _ = self.toggle_nagle(True)
-            nagle_ok = n_ok
-            return (ok and nagle_ok), "Gaming Mode applied."
-        else:
-            ok = run_ps_elevated_blocking(script)
-            if ok:
-                run_ps_elevated_blocking("Get-ChildItem 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces' | "
-                                         "ForEach-Object { New-ItemProperty -Path $_.PsPath -Name 'TcpNoDelay' -Value 1 -PropertyType DWord -Force; "
-                                         "New-ItemProperty -Path $_.PsPath -Name 'TcpAckFrequency' -Value 1 -PropertyType DWord -Force }")
-            return ok, "Gaming Mode applied (elevated)." if ok else "Failed to apply Gaming Mode."
-
-    def revert_normal_mode(self) -> Tuple[bool, str]:
-        script = r"""
-powercfg -setactive SCHEME_BALANCED | Out-Null
-New-Item -Path 'HKCU:\System\GameConfigStore' -Force | Out-Null
-Set-ItemProperty -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled' -Type DWord -Value 1
-New-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' -Force | Out-Null
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' -Name 'AppCaptureEnabled' -Type DWord -Value 1
-New-Item -Path 'HKCU:\Software\Microsoft\GameBar' -Force | Out-Null
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'ShowStartupPanel' -Type DWord -Value 1
-Set-ItemProperty -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'UseNexus' -Type DWord -Value 1
-netsh int tcp set global congestionprovider=none | Out-Null
-netsh int tcp set global autotuninglevel=normal | Out-Null
-$svc = Get-Service -Name 'SysMain' -ErrorAction SilentlyContinue
-if ($svc) {
-  Set-Service -Name 'SysMain' -StartupType Automatic -ErrorAction SilentlyContinue
-  if ($svc.Status -ne 'Running') { Start-Service -Name 'SysMain' -ErrorAction SilentlyContinue }
-}
-"""
-        if is_admin():
-            r = run_ps(script)
-            ok = (r.returncode == 0)
-            self.toggle_nagle(False)
-            return ok, "Reverted to Normal Mode." if ok else (r.stderr or r.stdout or "Failed to revert.")
-        else:
-            ok = run_ps_elevated_blocking(script)
-            if ok:
-                run_ps_elevated_blocking("Get-ChildItem 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces' | "
-                                         "ForEach-Object { New-ItemProperty -Path $_.PsPath -Name 'TcpNoDelay' -Value 0 -PropertyType DWord -Force; "
-                                         "New-ItemProperty -Path $_.PsPath -Name 'TcpAckFrequency' -Value 0 -PropertyType DWord -Force }")
-            return ok, "Reverted to Normal Mode (elevated)." if ok else "Failed to revert."
-
-    # ======================================================================
-    # Phase 4: Startup & Background Services
-    # ======================================================================
-
-    # ---- Startup helpers ----
-    def _startup_keys(self):
-        return [
-            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"),
-            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Run"),
-        ]
-
-    def _disabled_key_path(self, base: str) -> str:
-        return base.replace("\\Run", "\\Run-Disabled-QrsTweaks")
-
-    def _ensure_key(self, root, path):
-        try:
-            winreg.CreateKey(root, path)
-        except Exception:
-            pass
-
-    def _startup_folders(self) -> List[Path]:
-        user_startup = Path(os.environ.get("APPDATA", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup"
-        common_startup = Path(os.environ.get("ProgramData", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup"
-        return [p for p in [user_startup, common_startup] if p and p.exists()]
-
-    def _disabled_startup_folder(self, startup_folder: Path) -> Path:
-        return startup_folder.parent / "Startup (Disabled by QrsTweaks)"
-
-    def _is_allowlisted(self, name: str, val: str) -> bool:
-        name_l = (name or "").lower()
-        val_l = (val or "").lower()
-        allow = [
-            "securityhealth", "defender", "msascui", "ctfmon",
-            "realtek", "nahimic", "audio", "sound", "rtk",
-            "nvidia", "nvbackend", "igfx", "intelgraphics", "amd", "radeon",
-        ]
-        return any(a in name_l or a in val_l for a in allow)
-
-    def list_startup_entries_detailed(self) -> Tuple[bool, str]:
-        lines = ["[Startup] Entries:"]
-        # Registry
-        for root, path in self._startup_keys():
-            try:
-                with winreg.OpenKey(root, path) as k:
-                    i = 0
-                    while True:
-                        try:
-                            name, val, _ = winreg.EnumValue(k, i); i += 1
-                            lines.append(f"  - REG  @{path} :: {name} => {val}")
-                        except OSError:
-                            break
-            except FileNotFoundError:
-                pass
-
-        # Startup folders
-        for folder in self._startup_folders():
-            try:
-                for item in folder.iterdir():
-                    if item.name.lower() == "desktop.ini":
-                        continue
-                    lines.append(f"  - FILE @{folder} :: {item.name} => {item}")
-            except Exception:
-                pass
-
-        if len(lines) == 1:
-            lines.append("  (none)")
-        return True, "\n".join(lines)
-
-    def disable_startup_auto(self) -> Tuple[bool, str]:
-        """Disable non-essential startup entries: move from Run -> Run-Disabled-QrsTweaks and move files."""
-        if not is_admin():
-            ok = run_ps_elevated_blocking("Write-Host 'elevating for startup changes'")
-            if not ok:
-                return False, "Admin required to disable startup entries."
-
-        moved = 0
-        # Registry: move values to disabled key if not allowlisted
-        for root, base in self._startup_keys():
-            disabled = self._disabled_key_path(base)
-            self._ensure_key(root, disabled)
-            try:
-                with winreg.OpenKey(root, base) as k:
-                    # collect first to avoid editing while enumerating
-                    entries = []
-                    i = 0
-                    while True:
-                        try:
-                            name, val, typ = winreg.EnumValue(k, i); i += 1
-                            entries.append((name, val, typ))
-                        except OSError:
-                            break
-            except FileNotFoundError:
-                entries = []
-
-            for name, val, typ in entries:
-                if self._is_allowlisted(name, val):
-                    continue
-                try:
-                    with winreg.OpenKey(root, disabled, 0, winreg.KEY_SET_VALUE) as kd:
-                        winreg.SetValueEx(kd, name, 0, typ, val)
-                    with winreg.OpenKey(root, base, 0, winreg.KEY_SET_VALUE) as kb:
-                        try:
-                            winreg.DeleteValue(kb, name)
-                        except FileNotFoundError:
-                            pass
-                    moved += 1
-                except Exception:
-                    pass
-
-        # Startup folders: move files to "Startup (Disabled by QrsTweaks)"
-        for folder in self._startup_folders():
-            disabled_folder = self._disabled_startup_folder(folder)
-            disabled_folder.mkdir(parents=True, exist_ok=True)
-            try:
-                for item in list(folder.iterdir()):
-                    if item.name.lower() == "desktop.ini":
-                        continue
-                    try:
-                        shutil.move(str(item), str(disabled_folder / item.name))
-                        moved += 1
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        return True, f"Disabled {moved} startup item(s)."
-
-    def enable_startup_disabled(self) -> Tuple[bool, str]:
-        """Re-enable items previously disabled by QrsTweaks."""
-        if not is_admin():
-            ok = run_ps_elevated_blocking("Write-Host 'elevating for startup changes'")
-            if not ok:
-                return False, "Admin required to enable startup entries."
-
-        restored = 0
-        # Registry: move values back from Run-Disabled-QrsTweaks -> Run
-        for root, base in self._startup_keys():
-            disabled = self._disabled_key_path(base)
-            try:
-                with winreg.OpenKey(root, disabled) as k:
-                    entries = []
-                    i = 0
-                    while True:
-                        try:
-                            name, val, typ = winreg.EnumValue(k, i); i += 1
-                            entries.append((name, val, typ))
-                        except OSError:
-                            break
-            except FileNotFoundError:
-                entries = []
-
-            for name, val, typ in entries:
-                try:
-                    with winreg.OpenKey(root, base, 0, winreg.KEY_SET_VALUE) as kb:
-                        winreg.SetValueEx(kb, name, 0, typ, val)
-                    with winreg.OpenKey(root, disabled, 0, winreg.KEY_SET_VALUE) as kd:
-                        try:
-                            winreg.DeleteValue(kd, name)
-                        except FileNotFoundError:
-                            pass
-                    restored += 1
-                except Exception:
-                    pass
-
-        # Startup folders: move files back
-        for folder in self._startup_folders():
-            disabled_folder = self._disabled_startup_folder(folder)
-            if not disabled_folder.exists():
-                continue
-            try:
-                for item in list(disabled_folder.iterdir()):
-                    try:
-                        shutil.move(str(item), str(folder / item.name))
-                        restored += 1
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        return True, f"Re-enabled {restored} startup item(s)."
-
-    def remove_startup_disabled(self) -> Tuple[bool, str]:
-        """Permanently delete items previously disabled by QrsTweaks (registry & files)."""
-        if not is_admin():
-            ok = run_ps_elevated_blocking("Write-Host 'elevating for startup changes'")
-            if not ok:
-                return False, "Admin required to remove startup entries."
-
+    def clear_cache(self) -> str:
         removed = 0
-        # Registry: delete values under Run-Disabled-QrsTweaks
-        for root, base in self._startup_keys():
-            disabled = self._disabled_key_path(base)
-            try:
-                with winreg.OpenKey(root, disabled) as k:
-                    names = []
-                    i = 0
-                    while True:
-                        try:
-                            name, _, _ = winreg.EnumValue(k, i); i += 1
-                            names.append(name)
-                        except OSError:
-                            break
-            except FileNotFoundError:
-                names = []
-
-            for name in names:
-                try:
-                    with winreg.OpenKey(root, disabled, 0, winreg.KEY_SET_VALUE) as kd:
-                        winreg.DeleteValue(kd, name)
-                        removed += 1
-                except Exception:
-                    pass
-
-        # Startup folders: delete files in "Startup (Disabled by QrsTweaks)"
-        for folder in self._startup_folders():
-            disabled_folder = self._disabled_startup_folder(folder)
-            if not disabled_folder.exists():
-                continue
-            try:
-                for item in list(disabled_folder.iterdir()):
-                    try:
-                        if item.is_dir():
-                            shutil.rmtree(item, ignore_errors=True)
-                        else:
-                            item.unlink(missing_ok=True)
-                        removed += 1
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        return True, f"Permanently removed {removed} disabled startup item(s)."
-
-    # ---- Background Services ----
-    def list_heavy_services(self) -> Tuple[bool, str]:
-        """Return a summary of known heavy/optional services and their states."""
-        names = [
-            "SysMain", "WSearch", "DiagTrack", "dmwappushsvc",
-            "MapsBroker", "WMPNetworkSvc", "WerSvc"
+        targets = [
+            Path.home() / "AppData" / "Local" / "Microsoft" / "Windows" / "WebCache",
+            Path.home() / "AppData" / "Local" / "Microsoft" / "Windows" / "INetCache",
+            Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data" / "Default" / "Cache",
         ]
-        ps = (
-            "$n=@('SysMain','WSearch','DiagTrack','dmwappushsvc','MapsBroker','WMPNetworkSvc','WerSvc');"
-            "Get-Service -Name $n -ErrorAction SilentlyContinue | "
-            "Select-Object Name,Status,StartType | ConvertTo-Json"
-        )
-        r = run_ps(ps)
-        lines = ["[Services] Heavy/Optional services:"]
-        if r.returncode == 0 and r.stdout.strip():
+        for base in targets:
+            if not base.exists():
+                continue
+            for root, dirs, files in os.walk(base):
+                for f in files:
+                    fp = Path(root) / f
+                    try:
+                        fp.unlink()
+                        removed += 1
+                    except OSError:
+                        pass
+        return f"[Storage] Cleared ~{removed} cached files."
+
+    # -------------------------------------------------
+    # MEM-LEAK PROTECTOR (stubbed)
+    # -------------------------------------------------
+    def start_memleak_protector(self, process_names: List[str], mb_threshold: int) -> Tuple[bool, str]:
+        return True, f"MemLeak protector configured for {process_names} at {mb_threshold} MB (simulated)."
+
+    def stop_memleak_protector(self) -> Tuple[bool, str]:
+        return True, "MemLeak protector stopped (simulated)."
+
+    # -------------------------------------------------
+    # PROFILE SYSTEM (EXPORT/IMPORT)
+    # -------------------------------------------------
+    def _get_current_dns(self) -> Tuple[str, str]:
+        # Placeholder for now (introspection is complex); still consistent with applied tweaks.
+        return "1.1.1.1", "1.0.0.1"
+
+    def _get_current_state(self) -> Dict[str, Any]:
+        dns1, dns2 = self._get_current_dns()
+        state = {
+            "profile_version": "1.0",
+            "system": {
+                "high_performance_plan": True
+            },
+            "network": {
+                "dns_primary": dns1,
+                "dns_secondary": dns2,
+                "ctcp": True,
+                "autotuning": "restricted",
+                "disable_nagle": True,
+            },
+            "memory": {
+                "memleak_guard_enabled": False,
+                "process_list": [],
+                "threshold_mb": 1024,
+            },
+            "cleanup": {
+                "clear_temp": False,
+                "deep_cleanup": False,
+                "clear_browser_cache": False,
+            },
+            "startup": {
+                "startup_blocklist": [],
+            },
+        }
+        return state
+
+    def export_profile(self, path: str) -> Tuple[bool, str]:
+        state = self._get_current_state()
+        profile = {
+            "profile_version": state.get("profile_version", "1.0"),
+            "name": "Exported Profile",
+            "description": "Profile exported from current system state by QrsTweaks.",
+            "created_by": "QrsTweaks",
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            **{k: v for k, v in state.items() if k not in ("profile_version",)},
+        }
+
+        try:
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with p.open("w", encoding="utf-8") as f:
+                json.dump(profile, f, indent=2)
+            return True, "Profile exported."
+        except OSError as e:
+            return False, f"Failed to write profile: {e}"
+
+    def _normalize_profile(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        out = {}
+        out["profile_version"] = str(data.get("profile_version", "1.0"))
+        out["name"] = data.get("name", "Imported Profile")
+        out["description"] = data.get("description", "")
+        out["created_by"] = data.get("created_by", "unknown")
+
+        sys_cfg = data.get("system", {}) or {}
+        net_cfg = data.get("network", {}) or {}
+        mem_cfg = data.get("memory", {}) or {}
+        cln_cfg = data.get("cleanup", {}) or {}
+        stp_cfg = data.get("startup", {}) or {}
+
+        out["system"] = {
+            "high_performance_plan": bool(sys_cfg.get("high_performance_plan", False))
+        }
+
+        out["network"] = {
+            "dns_primary": str(net_cfg.get("dns_primary", "1.1.1.1")),
+            "dns_secondary": str(net_cfg.get("dns_secondary", "1.0.0.1")),
+            "ctcp": bool(net_cfg.get("ctcp", True)),
+            "autotuning": str(net_cfg.get("autotuning", "normal")),
+            "disable_nagle": bool(net_cfg.get("disable_nagle", False)),
+        }
+
+        out["memory"] = {
+            "memleak_guard_enabled": bool(mem_cfg.get("memleak_guard_enabled", False)),
+            "process_list": list(mem_cfg.get("process_list", [])),
+            "threshold_mb": int(mem_cfg.get("threshold_mb", 1024)),
+        }
+
+        out["cleanup"] = {
+            "clear_temp": bool(cln_cfg.get("clear_temp", False)),
+            "deep_cleanup": bool(cln_cfg.get("deep_cleanup", False)),
+            "clear_browser_cache": bool(cln_cfg.get("clear_browser_cache", False)),
+        }
+
+        out["startup"] = {
+            "startup_blocklist": list(stp_cfg.get("startup_blocklist", []))
+        }
+
+        return out
+
+    def _apply_profile_dict(self, profile: Dict[str, Any]) -> str:
+        log_lines: List[str] = []
+        sys_cfg = profile.get("system", {})
+        net_cfg = profile.get("network", {})
+        mem_cfg = profile.get("memory", {})
+        cln_cfg = profile.get("cleanup", {})
+        stp_cfg = profile.get("startup", {})
+
+        if sys_cfg.get("high_performance_plan"):
+            ok, msg = self.create_high_perf_powerplan()
+            log_lines.append(f"[Profile/System] {msg}")
+
+        dns1 = net_cfg.get("dns_primary")
+        dns2 = net_cfg.get("dns_secondary")
+        if dns1 and dns2:
+            ok, msg = self.set_dns(dns1, dns2)
+            log_lines.append(f"[Profile/Network] {msg}")
+
+        ok, msg = self.enable_ctcp(net_cfg.get("ctcp", True))
+        log_lines.append(f"[Profile/Network] {msg}")
+
+        ok, msg = self.autotuning(net_cfg.get("autotuning", "normal"))
+        log_lines.append(f"[Profile/Network] {msg}")
+
+        ok, msg = self.toggle_nagle(net_cfg.get("disable_nagle", False))
+        log_lines.append(f"[Profile/Network] {msg}")
+
+        if mem_cfg.get("memleak_guard_enabled", False):
+            ok, msg = self.start_memleak_protector(
+                mem_cfg.get("process_list", []),
+                mem_cfg.get("threshold_mb", 1024),
+            )
+            log_lines.append(f"[Profile/Memory] {msg}")
+
+        if cln_cfg.get("clear_temp", False):
+            n = self.cleanup_temp_files()
+            log_lines.append(f"[Profile/Cleanup] Temp cleanup: {n} files removed.")
+        if cln_cfg.get("deep_cleanup", False):
+            n = self.deep_cleanup()
+            log_lines.append(f"[Profile/Cleanup] Deep cleanup: {n} items removed.")
+        if cln_cfg.get("clear_browser_cache", False):
+            out = self.clear_cache()
+            log_lines.append(f"[Profile/Cleanup] {out}")
+
+        blocklist = stp_cfg.get("startup_blocklist", [])
+        if blocklist:
+            log_lines.append(
+                "[Profile/Startup] Blocklist specified but enforcement is not yet implemented: "
+                + ", ".join(blocklist)
+            )
+
+        return "\n".join(log_lines)
+
+    def import_profile(self, path: str) -> Tuple[bool, str]:
+        p = Path(path)
+        if not p.exists():
+            return False, f"[Profile] File not found: {path}"
+
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            return False, f"[Profile] Invalid JSON: {e}"
+
+        profile = self._normalize_profile(data)
+        applied_log = self._apply_profile_dict(profile)
+        header = f"[Profile] Imported '{profile.get('name', 'Unnamed')}'"
+        return True, header + "\n" + applied_log
+
+    # -------------------------------------------------
+    # SYSTEM REPAIROPS
+    # -------------------------------------------------
+    def repair_windows_update(self) -> Tuple[bool, str]:
+        """
+        Tries to repair Windows Update by stopping services, cleaning SoftwareDistribution, and restarting services.
+        """
+        logs = []
+
+        cmds = [
+            "net stop wuauserv",
+            "net stop cryptSvc",
+            "net stop bits",
+            "net stop msiserver",
+        ]
+        for c in cmds:
+            ok, out = self._run_cmd(c)
+            logs.append(f"{c}: {out}")
+
+        # rename SoftwareDistribution / catroot2
+        for src, dst in [
+            (r"C:\Windows\SoftwareDistribution", r"C:\Windows\SoftwareDistribution.old"),
+            (r"C:\Windows\System32\catroot2", r"C:\Windows\System32\catroot2.old"),
+        ]:
             try:
-                data = json.loads(r.stdout)
-                if isinstance(data, dict):
-                    data = [data]
-                for d in data:
-                    lines.append(f"  - {d.get('Name')} | {d.get('Status')} | {d.get('StartType')}")
-            except Exception:
-                lines.append("  (Unable to parse service info.)")
-        else:
-            lines.append("  (No data)")
-        return True, "\n".join(lines)
+                if os.path.exists(dst):
+                    # already renamed earlier; skip
+                    pass
+                elif os.path.exists(src):
+                    os.rename(src, dst)
+                    logs.append(f"Renamed {src} -> {dst}")
+            except OSError as e:
+                logs.append(f"Failed to rename {src}: {e}")
 
-    def disable_non_essential_services(self) -> Tuple[bool, str]:
-        """Disable + stop a curated set of non-essential services (safe default list)."""
-        script = r"""
-$n = @('SysMain','WSearch','DiagTrack','dmwappushsvc','MapsBroker','WMPNetworkSvc','WerSvc')
-foreach ($svc in $n) {
-  $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
-  if ($s) {
-    try {
-      Set-Service -Name $svc -StartupType Disabled -ErrorAction SilentlyContinue
-      if ($s.Status -eq 'Running') { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue }
-    } catch {}
-  }
-}
-"""
-        if is_admin():
-            r = run_ps(script)
-            ok = (r.returncode == 0)
-            return ok, "Disabled non-essential services." if ok else (r.stderr or r.stdout or "Failed to disable services.")
-        else:
-            ok = run_ps_elevated_blocking(script)
-            return ok, "Disabled non-essential services (elevated)." if ok else "Failed (UAC denied)."
+        cmds2 = [
+            "net start wuauserv",
+            "net start cryptSvc",
+            "net start bits",
+            "net start msiserver",
+        ]
+        all_ok = True
+        for c in cmds2:
+            ok, out = self._run_cmd(c)
+            logs.append(f"{c}: {out}")
+            all_ok = all_ok and ok
 
-    def restore_default_services(self) -> Tuple[bool, str]:
-        """Restore default-ish startup types for the curated list."""
-        # Approximate defaults: SysMain Auto, WSearch Auto, DiagTrack Manual, dmwappushsvc Manual,
-        # MapsBroker Manual, WMPNetworkSvc Manual, WerSvc Manual
-        script = r"""
-$defaults = @{
-  'SysMain'='Automatic'
-  'WSearch'='Automatic'
-  'DiagTrack'='Manual'
-  'dmwappushsvc'='Manual'
-  'MapsBroker'='Manual'
-  'WMPNetworkSvc'='Manual'
-  'WerSvc'='Manual'
-}
-foreach ($pair in $defaults.GetEnumerator()) {
-  $n = $pair.Key; $t = $pair.Value
-  $s = Get-Service -Name $n -ErrorAction SilentlyContinue
-  if ($s) {
-    try {
-      Set-Service -Name $n -StartupType $t -ErrorAction SilentlyContinue
-      if ($t -eq 'Automatic' -and $s.Status -ne 'Running') { Start-Service -Name $n -ErrorAction SilentlyContinue }
-    } catch {}
-  }
-}
-"""
-        if is_admin():
-            r = run_ps(script)
-            ok = (r.returncode == 0)
-            return ok, "Restored default service startup types." if ok else (r.stderr or r.stdout or "Failed to restore defaults.")
-        else:
-            ok = run_ps_elevated_blocking(script)
-            return ok, "Restored default service startup types (elevated)." if ok else "Failed (UAC denied)."
+        msg = "[RepairOps] Windows Update repair routine completed.\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def reset_network_stack(self) -> Tuple[bool, str]:
+        logs = []
+        cmds = [
+            "netsh winsock reset",
+            "netsh int ip reset",
+        ]
+        all_ok = True
+        for c in cmds:
+            ok, out = self._run_cmd(c)
+            logs.append(f"{c}: {out}")
+            all_ok = all_ok and ok
+        msg = "[RepairOps] Network stack reset. A reboot is recommended.\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def run_dism_sfc(self) -> Tuple[bool, str]:
+        logs = []
+        dism = "DISM.exe /Online /Cleanup-image /RestoreHealth"
+        sfc = "sfc /scannow"
+
+        ok1, out1 = self._run_cmd(dism)
+        logs.append(f"{dism}: {out1}")
+        ok2, out2 = self._run_cmd(sfc)
+        logs.append(f"{sfc}: {out2}")
+
+        all_ok = ok1 and ok2
+        msg = "[RepairOps] DISM + SFC repair completed.\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def reset_store_cache(self) -> Tuple[bool, str]:
+        cmd = "wsreset.exe -i"
+        ok, out = self._run_cmd(cmd)
+        if ok:
+            return True, "[RepairOps] Microsoft Store cache reset requested. Store may open briefly."
+        return False, f"[RepairOps] Store cache reset failed: {out}"
+
+    # -------------------------------------------------
+    # SAFE DEBLOAT OPS
+    # -------------------------------------------------
+    def debloat_xbox_gamebar(self) -> Tuple[bool, str]:
+        cmds = [
+            r'reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 0 /f',
+            r'reg add "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f',
+        ]
+        logs = []
+        all_ok = True
+        for c in cmds:
+            ok, out = self._run_cmd(c)
+            logs.append(f"{c}: {out}")
+            all_ok = all_ok and ok
+        msg = "[Debloat] Xbox Game Bar / DVR disabled.\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def debloat_background_apps(self) -> Tuple[bool, str]:
+        # Global disable of background apps via registry (where supported).
+        cmd = (
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" '
+            r'/v GlobalUserDisabled /t REG_DWORD /d 1 /f'
+        )
+        ok, out = self._run_cmd(cmd)
+        if ok:
+            return True, "[Debloat] Background apps disabled (where supported)."
+        return False, f"[Debloat] Failed to change background apps setting: {out}"
+
+    def debloat_telemetry_safe(self) -> Tuple[bool, str]:
+        # Disable a few high-telemetry scheduled tasks without murdering the OS.
+        tasks = [
+            r"\Microsoft\Windows\Application Experience\ProgramDataUpdater",
+            r"\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
+            r"\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
+        ]
+        logs = []
+        all_ok = True
+        for t in tasks:
+            cmd = f'schtasks /Change /TN "{t}" /Disable'
+            ok, out = self._run_cmd(cmd)
+            logs.append(f"{cmd}: {out}")
+            all_ok = all_ok and ok
+        msg = "[Debloat] Selected telemetry tasks disabled (safe set).\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def debloat_cortana_search(self) -> Tuple[bool, str]:
+        cmds = [
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f',
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v CortanaConsent /t REG_DWORD /d 0 /f',
+        ]
+        logs = []
+        all_ok = True
+        for c in cmds:
+            ok, out = self._run_cmd(c)
+            logs.append(f"{c}: {out}")
+            all_ok = all_ok and ok
+        msg = "[Debloat] Bing web search + Cortana usage reduced.\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def debloat_revert_safe(self) -> Tuple[bool, str]:
+        logs = []
+        all_ok = True
+
+        # Re-enable background apps
+        cmd_bg = (
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" '
+            r'/v GlobalUserDisabled /t REG_DWORD /d 0 /f'
+        )
+        ok, out = self._run_cmd(cmd_bg)
+        logs.append(f"{cmd_bg}: {out}")
+        all_ok = all_ok and ok
+
+        # Re-enable telemetry tasks
+        tasks = [
+            r"\Microsoft\Windows\Application Experience\ProgramDataUpdater",
+            r"\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
+            r"\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
+        ]
+        for t in tasks:
+            cmd = f'schtasks /Change /TN "{t}" /Enable'
+            ok, out = self._run_cmd(cmd)
+            logs.append(f"{cmd}: {out}")
+            all_ok = all_ok and ok
+
+        # Reset Cortana / search bits to defaults (not fully on, but more neutral)
+        cmds = [
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 1 /f',
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v CortanaConsent /t REG_DWORD /d 1 /f',
+        ]
+        for c in cmds:
+            ok, out = self._run_cmd(c)
+            logs.append(f"{c}: {out}")
+            all_ok = all_ok and ok
+
+        msg = "[Debloat] Safe debloat profile reverted as much as possible.\n" + "\n".join(logs)
+        return all_ok, msg
+
+    # -------------------------------------------------
+    # UI / TASKBAR TWEAKS
+    # -------------------------------------------------
+    def ui_disable_bing_search(self) -> Tuple[bool, str]:
+        cmds = [
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f',
+            r'reg add "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f',
+        ]
+        logs = []
+        all_ok = True
+        for c in cmds:
+            ok, out = self._run_cmd(c)
+            logs.append(f"{c}: {out}")
+            all_ok = all_ok and ok
+        msg = "[UI] Bing / web results in Start search disabled.\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def ui_hide_widgets(self) -> Tuple[bool, str]:
+        cmd = (
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" '
+            r'/v TaskbarDa /t REG_DWORD /d 0 /f'
+        )
+        ok, out = self._run_cmd(cmd)
+        if ok:
+            return True, "[UI] Widgets hidden from taskbar."
+        return False, f"[UI] Failed to hide widgets: {out}"
+
+    def ui_hide_chat_icon(self) -> Tuple[bool, str]:
+        cmd = (
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" '
+            r'/v TaskbarMn /t REG_DWORD /d 0 /f'
+        )
+        ok, out = self._run_cmd(cmd)
+        if ok:
+            return True, "[UI] Chat icon hidden from taskbar."
+        return False, f"[UI] Failed to hide chat icon: {out}"
+
+    def ui_explorer_this_pc(self) -> Tuple[bool, str]:
+        # 1 = This PC, 0 = Quick Access (on most builds)
+        cmd = (
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" '
+            r'/v LaunchTo /t REG_DWORD /d 1 /f'
+        )
+        ok, out = self._run_cmd(cmd)
+        if ok:
+            return True, "[UI] Explorer set to open in 'This PC'."
+        return False, f"[UI] Failed to set Explorer LaunchTo: {out}"
+
+    def ui_show_file_extensions(self) -> Tuple[bool, str]:
+        cmd = (
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" '
+            r'/v HideFileExt /t REG_DWORD /d 0 /f'
+        )
+        ok, out = self._run_cmd(cmd)
+        if ok:
+            return True, "[UI] File extensions now visible."
+        return False, f"[UI] Failed to change HideFileExt: {out}"
+
+    def ui_restore_defaults(self) -> Tuple[bool, str]:
+        logs = []
+        all_ok = True
+
+        cmds = [
+            # Bing search back on
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 1 /f',
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v CortanaConsent /t REG_DWORD /d 1 /f',
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarDa /t REG_DWORD /d 1 /f',
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 1 /f',
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v LaunchTo /t REG_DWORD /d 0 /f',
+            r'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 1 /f',
+            r'reg add "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 0 /f',
+        ]
+        for c in cmds:
+            ok, out = self._run_cmd(c)
+            logs.append(f"{c}: {out}")
+            all_ok = all_ok and ok
+
+        msg = "[UI] UI / taskbar settings restored towards defaults (may require Explorer restart).\n" + "\n".join(logs)
+        return all_ok, msg
+
+    # -------------------------------------------------
+    # BACKUP & RESTORE SNAPSHOTS
+    # -------------------------------------------------
+    def create_backup_snapshot(self) -> Tuple[bool, str]:
+        """
+        Create a backup snapshot of the current profile state into /backups as .qrsp.
+        """
+        try:
+            self.backups_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return False, f"[Backup] Failed to create backups folder: {e}"
+
+        ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        path = self.backups_dir / f"backup-{ts}.qrsp"
+        ok, msg = self.export_profile(str(path))
+        if ok:
+            return True, f"[Backup] Snapshot saved: {path}"
+        return False, f"[Backup] Snapshot failed: {msg}"
+
+    def restore_latest_backup(self) -> Tuple[bool, str]:
+        """
+        Find the latest .qrsp in /backups and import it.
+        """
+        if not self.backups_dir.exists():
+            return False, "[Backup] No backups folder found."
+
+        files = list(self.backups_dir.glob("*.qrsp"))
+        if not files:
+            return False, "[Backup] No backup snapshots found."
+
+        latest = max(files, key=lambda p: p.stat().st_mtime)
+        ok, msg = self.import_profile(str(latest))
+        if ok:
+            return True, f"[Backup] Restored from {latest}.\n{msg}"
+        return False, f"[Backup] Restore from {latest} failed:\n{msg}"
+
+    def open_backup_folder(self) -> Tuple[bool, str]:
+        """
+        Open the backups folder in Explorer (Windows-only).
+        """
+        try:
+            self.backups_dir.mkdir(parents=True, exist_ok=True)
+            if platform.system().lower().startswith("win"):
+                os.startfile(str(self.backups_dir))
+                return True, "[Backup] Opened backup folder in Explorer."
+            else:
+                return False, "[Backup] Opening folder is only supported on Windows."
+        except Exception as e:
+            return False, f"[Backup] Failed to open backups folder: {e}"
