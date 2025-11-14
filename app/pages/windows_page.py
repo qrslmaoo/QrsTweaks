@@ -6,14 +6,20 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from app.ui.widgets.card import Card
+    # Basic card container
 from app.ui.widgets.toggle import Toggle
 from app.ui.widgets.glow_indicator import GlowIndicator
 from app.ui.widgets.divider import Divider
 from app.ui.animations import fade_in, slide_in_y
 
 from src.qrs.modules.windows_optim import WindowsOptimizer
-from src.qrs.service.controller import ServiceController
 from src.qrs.service.autostart import AutostartManager
+from src.qrs.service.controller import (
+    start_daemon,
+    stop_daemon,
+    restart_daemon,
+    daemon_running,
+)
 
 
 class WindowsPage(QWidget):
@@ -23,7 +29,6 @@ class WindowsPage(QWidget):
 
         # Core backend objects
         self.opt = WindowsOptimizer()
-        self.service = ServiceController()
         self.autostart = AutostartManager()
 
         # ----------------------------------------
@@ -330,6 +335,8 @@ class WindowsPage(QWidget):
 
         # wire everything
         self._connect()
+
+        # Initial service state
         self._init_service_status()
 
     # ----------------------------------------
@@ -415,44 +422,45 @@ class WindowsPage(QWidget):
     # SERVICE STATUS INIT / REFRESH
     # ----------------------------------------
     def _init_service_status(self):
-        # Autostart checkbox initial state
-        enabled = self.autostart.is_enabled()
-        self.chk_svc_autostart.blockSignals(True)
-        self.chk_svc_autostart.setChecked(enabled)
-        self.chk_svc_autostart.blockSignals(False)
+        # autostart checkbox
+        try:
+            self.chk_svc_autostart.setChecked(self.autostart.is_enabled())
+        except Exception as e:
+            self.log.append(f"[Service] Failed to read autostart state: {e!r}")
 
-        # Initial status + start timer
+        # initial status + start timer
         self._svc_refresh_status()
         self._svc_timer.start()
 
     def _svc_refresh_status(self):
-        running, detail = self.service.is_daemon_running()
+        running, _detail = daemon_running()
+
         if running:
-            self.lbl_svc_status.setText("Service status: Running")
-            self.ind_svc.show()
+            self.lbl_svc_status.setText("Service status: running")
+            self.ind_svc.setColor("#44dd44")
+            self.ind_svc.setEnabled(True)
         else:
-            self.lbl_svc_status.setText("Service status: Stopped")
-            self.ind_svc.hide()
-        # Also echo to log in a low-key way
-        self.log.append(f"[Service] Status check: {detail}")
+            self.lbl_svc_status.setText("Service status: stopped")
+            self.ind_svc.setColor("#888888")
+            self.ind_svc.setEnabled(False)
 
     # ----------------------------------------
     # SERVICE ACTIONS
     # ----------------------------------------
     def _svc_start(self):
-        ok, msg = self.service.start_daemon()
+        ok, msg = start_daemon()
         prefix = "[Service] Started: " if ok else "[Service] Start failed: "
         self.log.append(prefix + msg)
         self._svc_refresh_status()
 
     def _svc_stop(self):
-        ok, msg = self.service.stop_daemon()
+        ok, msg = stop_daemon()
         prefix = "[Service] Stopped: " if ok else "[Service] Stop failed: "
         self.log.append(prefix + msg)
         self._svc_refresh_status()
 
     def _svc_restart(self):
-        ok, msg = self.service.restart_daemon()
+        ok, msg = restart_daemon()
         prefix = "[Service] Restarted: " if ok else "[Service] Restart failed: "
         self.log.append(prefix + msg)
         self._svc_refresh_status()

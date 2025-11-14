@@ -4,27 +4,20 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QComboBox, QScrollArea
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 
 from app.ui.widgets.card import Card
 from src.qrs.modules.game_optim import GameOptimizer
-from src.qrs.core.log_manager import log_mgr
 
 
 class GamesPage(QWidget):
     """
     Game Optimizer page
 
-    Layout mirrors WindowsPage:
+    Layout is intentionally made to mirror WindowsPage:
       - One big title
       - Everything else inside Card widgets
       - Single scroll area with 10px margins and 16px spacing
-
-    Phase 6+ additions:
-      - Smart Game Mode (auto-apply tweaks when game starts)
-      - Real CPU priority / affinity wiring
-      - Fortnite preset integration
-      - Global logging via LogManager
     """
 
     def __init__(self, parent=None):
@@ -33,15 +26,8 @@ class GamesPage(QWidget):
 
         self.opt = GameOptimizer()
 
-        # Smart Game Mode state
-        self.auto_enabled = False
-        self.auto_timer = QTimer(self)
-        self.auto_timer.setInterval(3000)  # check every 3s
-        self.auto_timer.timeout.connect(self._auto_tick)
-        self._auto_last_pid = None
-
         # -------------------------------------------------
-        # SCROLL WRAPPER
+        # SCROLL WRAPPER (same pattern as WindowsPage)
         # -------------------------------------------------
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -108,26 +94,6 @@ class GamesPage(QWidget):
         root.addWidget(card_log)
 
         # -------------------------------------------------
-        # SMART GAME MODE (auto-apply on game start)
-        # -------------------------------------------------
-        card_auto = Card("Smart Game Mode")
-        auto_body = card_auto.body()
-
-        self.btn_auto = QPushButton("Smart Game Mode: OFF")
-        self.lbl_auto = QLabel(
-            "When enabled, QrsTweaks will watch for the selected game to start.\n"
-            "- Fortnite → applies Fortnite Gaming Preset automatically.\n"
-            "- Other games → HIGH process priority + recommended cores."
-        )
-        self.lbl_auto.setWordWrap(True)
-        self.lbl_auto.setStyleSheet("color:#AAB0BC; font-size:10pt;")
-
-        auto_body.addWidget(self.btn_auto)
-        auto_body.addWidget(self.lbl_auto)
-
-        root.addWidget(card_auto)
-
-        # -------------------------------------------------
         # FORTNITE TWEAKS + SYSTEM TUNING (ROW OF CARDS)
         # -------------------------------------------------
         row_ft = QHBoxLayout()
@@ -137,6 +103,7 @@ class GamesPage(QWidget):
         card_fn = Card("Fortnite Tweaks")
         fn_body = card_fn.body()
 
+        self.btn_fn_preset = QPushButton("Apply Fortnite Gaming Preset")
         self.btn_fn_disable_record = QPushButton(
             "Disable Background Recording (Game Bar / DVR)"
         )
@@ -145,6 +112,7 @@ class GamesPage(QWidget):
         self.btn_fn_clean_dx = QPushButton("Clean DirectX Cache (Game Scope)")
 
         for b in (
+            self.btn_fn_preset,
             self.btn_fn_disable_record,
             self.btn_fn_clean_logs,
             self.btn_fn_clean_shader,
@@ -158,16 +126,16 @@ class GamesPage(QWidget):
 
         self.btn_cpu_high = QPushButton("Set Game Process to HIGH Priority")
         self.btn_cpu_above = QPushButton("Set Game Process to ABOVE NORMAL")
-        self.btn_toggle_nagle = QPushButton("Disable Nagle (Low-Latency)")
         self.btn_affinity_recommended = QPushButton("Bind Game to Recommended Cores")
-        self.btn_affinity_all = QPushButton("Bind Game to All Cores")
+        self.btn_affinity_all = QPushButton("Bind Game to ALL Cores")
+        self.btn_toggle_nagle = QPushButton("Disable Nagle (Low-Latency)")
 
         for b in (
             self.btn_cpu_high,
             self.btn_cpu_above,
-            self.btn_toggle_nagle,
             self.btn_affinity_recommended,
             self.btn_affinity_all,
+            self.btn_toggle_nagle,
         ):
             tune_body.addWidget(b)
 
@@ -205,17 +173,16 @@ class GamesPage(QWidget):
         prof_body = card_prof.body()
 
         desc = QLabel(
-            "Profiles will store per-game optimization choices such as CPU priority, "
-            "network settings, shader cache behavior, and storage cleanup rules.\n"
-            "Basic Fortnite preset is available now; full export/import is coming later."
+            "Profiles store per-game optimization choices such as CPU priority, "
+            "network settings, shader cache behavior, and storage cleanup rules."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color:#AAB0BC; font-size:10pt;")
         prof_body.addWidget(desc)
 
         self.btn_profile_apply = QPushButton("Apply Current Game Profile")
-        self.btn_profile_export = QPushButton("Export Profile to .qrsgame (coming soon)")
-        self.btn_profile_import = QPushButton("Import Profile from .qrsgame (coming soon)")
+        self.btn_profile_export = QPushButton("Export Profile to .qrsgame")
+        self.btn_profile_import = QPushButton("Import Profile from .qrsgame")
 
         for b in (
             self.btn_profile_apply,
@@ -226,9 +193,10 @@ class GamesPage(QWidget):
 
         root.addWidget(card_prof)
 
+        # Stretch so content hugs the top when short
         root.addStretch()
 
-        # Attach scroll to this widget
+        # Attach scroll to this widget (same as WindowsPage)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -241,29 +209,27 @@ class GamesPage(QWidget):
     # SIGNAL CONNECTIONS
     # -------------------------------------------------
     def _connect(self):
-        # Game selector profile buttons (still basic for now)
+        # Game selector profile buttons (UI stubs for now)
         self.btn_load_profile.clicked.connect(
-            lambda: self._log("[Game] Load Game Profile… (not implemented yet)")
+            lambda: self._log("[Game] Load Game Profile… (coming soon)")
         )
         self.btn_save_profile.clicked.connect(
-            lambda: self._log("[Game] Save Game Profile… (not implemented yet)")
+            lambda: self._log("[Game] Save Game Profile… (coming soon)")
         )
 
-        # Smart Game Mode
-        self.btn_auto.clicked.connect(self._toggle_auto)
-
-        # Fortnite tweaks
+        # Fortnite tweaks (real backend logic)
+        self.btn_fn_preset.clicked.connect(self._fn_preset)
         self.btn_fn_disable_record.clicked.connect(self._fn_disable_record)
         self.btn_fn_clean_logs.clicked.connect(self._fn_clean_logs)
         self.btn_fn_clean_shader.clicked.connect(self._fn_clean_shader)
         self.btn_fn_clean_dx.clicked.connect(self._clean_dx)
 
-        # System tuning
+        # System tuning – hook to backend
         self.btn_cpu_high.clicked.connect(self._cpu_high)
         self.btn_cpu_above.clicked.connect(self._cpu_above)
-        self.btn_toggle_nagle.clicked.connect(self._nagle_stub)
         self.btn_affinity_recommended.clicked.connect(self._affinity_recommended)
         self.btn_affinity_all.clicked.connect(self._affinity_all)
+        self.btn_toggle_nagle.clicked.connect(self._toggle_nagle)
 
         # Storage tweaks
         self.btn_storage_clean_temp.clicked.connect(self._clean_temp)
@@ -272,188 +238,107 @@ class GamesPage(QWidget):
         self.btn_storage_clean_dx2.clicked.connect(self._clean_dx)
         self.btn_storage_reset_cfg.clicked.connect(self._reset_cfg)
 
-        # Profiles
-        self.btn_profile_apply.clicked.connect(self._apply_current_profile)
+        # Profiles (stubs for now)
+        self.btn_profile_apply.clicked.connect(
+            lambda: self._log("[Profile] Apply current game profile (coming soon)")
+        )
         self.btn_profile_export.clicked.connect(
-            lambda: self._log("[Profile] Export to .qrsgame not implemented yet.")
+            lambda: self._log("[Profile] Export profile to .qrsgame (coming soon)")
         )
         self.btn_profile_import.clicked.connect(
-            lambda: self._log("[Profile] Import from .qrsgame not implemented yet.")
+            lambda: self._log("[Profile] Import profile from .qrsgame (coming soon)")
         )
 
     # -------------------------------------------------
     # BACKEND LOGIC HOOKS
     # -------------------------------------------------
+    def _current_game_label(self) -> str:
+        return self.combo_game.currentText()
+
+    # ---- Fortnite helpers ----
+    def _fn_preset(self):
+        ok, msg = self.opt.apply_fortnite_gaming_preset()
+        self._log_result("[Fortnite] Gaming preset", ok, msg)
+
     def _fn_disable_record(self):
         ok1, msg1 = self.opt.disable_xbox_game_bar()
         ok2, msg2 = self.opt.disable_game_dvr()
+        ok = ok1 and ok2
         combined = msg1 + "\n" + msg2
         self._log_result(
             "[Fortnite] Disable Game Bar / DVR",
-            ok1 and ok2,
+            ok,
             combined,
         )
-        log_mgr.log("Game", "Disabled Xbox Game Bar / Game DVR.", level="ok" if (ok1 and ok2) else "warn")
 
     def _fn_clean_logs(self):
         ok, msg = self.opt.clean_fortnite_logs_and_crashes()
         self._log_result("[Fortnite] Clean logs & crash dumps", ok, msg)
-        log_mgr.log("Game", "Fortnite logs/crashes cleanup run.", level="ok" if ok else "warn")
 
     def _fn_clean_shader(self):
         ok, msg = self.opt.clean_fortnite_shader_cache()
         self._log_result("[Fortnite] Clean shader / pipeline cache", ok, msg)
-        log_mgr.log("Game", "Fortnite shader cache cleanup run.", level="ok" if ok else "warn")
 
     def _clean_dx(self):
         ok, msg = self.opt.clean_directx_cache()
         self._log_result("[DirectX] Cache cleanup", ok, msg)
-        log_mgr.log("Game", "DirectX cache cleanup run.", level="ok" if ok else "warn")
 
     # ---- System tuning helpers ----
     def _cpu_high(self):
-        game = self.combo_game.currentText()
+        game = self._current_game_label()
         ok, msg = self.opt.apply_game_priority(game, "HIGH")
-        self._log_result(f"[CPU] {game} → HIGH priority", ok, msg)
-        log_mgr.log("Game", f"{game}: HIGH priority applied.", level="ok" if ok else "warn", bubble=ok)
+        self._log_result(f"[CPU] {game}: HIGH priority", ok, msg)
 
     def _cpu_above(self):
-        game = self.combo_game.currentText()
+        game = self._current_game_label()
         ok, msg = self.opt.apply_game_priority(game, "ABOVE_NORMAL")
-        self._log_result(f"[CPU] {game} → ABOVE NORMAL priority", ok, msg)
-        log_mgr.log("Game", f"{game}: ABOVE NORMAL priority applied.", level="ok" if ok else "warn")
-
-    def _nagle_stub(self):
-        txt = (
-            "[Network] Per-game Nagle toggle is not implemented yet.\n"
-            "Use Windows Optimizer → Network Optimizer → 'Disable Nagle (gaming)'."
-        )
-        self._log(txt)
-        log_mgr.log("Game", "Per-game Nagle toggle not yet implemented.", level="info")
+        self._log_result(f"[CPU] {game}: ABOVE NORMAL priority", ok, msg)
 
     def _affinity_recommended(self):
-        game = self.combo_game.currentText()
+        game = self._current_game_label()
         ok, msg = self.opt.apply_game_affinity_recommended(game)
-        self._log_result(f"[CPU] {game} → recommended cores", ok, msg)
-        log_mgr.log("Game", f"{game}: recommended core affinity applied.", level="ok" if ok else "warn")
+        self._log_result(f"[Affinity] {game}: recommended cores", ok, msg)
 
     def _affinity_all(self):
-        game = self.combo_game.currentText()
+        game = self._current_game_label()
         ok, msg = self.opt.apply_game_affinity_all_cores(game)
-        self._log_result(f"[CPU] {game} → all cores", ok, msg)
-        log_mgr.log("Game", f"{game}: all-core affinity applied.", level="ok" if ok else "warn")
+        self._log_result(f"[Affinity] {game}: all cores", ok, msg)
+
+    def _toggle_nagle(self):
+        # For now this is informational – per-game Nagle will hook into the
+        # global Windows optimizer backend in a later phase.
+        self._log(
+            "[Network] Per-game Nagle toggle will use global Windows Nagle setting (coming in a later phase)."
+        )
 
     # ---- Storage helpers ----
     def _clean_temp(self):
-        game = self.combo_game.currentText()
-        msg = f"[Storage] Clean temp files for {game} (not implemented yet)"
-        self._log(msg)
-        log_mgr.log("Game", f"Temp cleanup stub invoked for {game}.", level="info")
+        game = self._current_game_label()
+        self._log(f"[Storage] Clean temp files for {game} (not implemented yet)")
 
     def _clean_crash(self):
-        game = self.combo_game.currentText()
+        game = self._current_game_label()
         if game == "Fortnite":
             self._fn_clean_logs()
         else:
-            msg = f"[Storage] Crash cleanup not implemented for {game}"
-            self._log(msg)
-            log_mgr.log("Game", msg, level="info")
+            self._log(f"[Storage] Crash cleanup not implemented for {game}")
 
     def _clean_shader(self):
-        game = self.combo_game.currentText()
+        game = self._current_game_label()
         if game == "Fortnite":
             self._fn_clean_shader()
         else:
-            msg = f"[Storage] Shader cleanup not implemented for {game}"
-            self._log(msg)
-            log_mgr.log("Game", msg, level="info")
+            self._log(f"[Storage] Shader cleanup not implemented for {game}")
 
     def _reset_cfg(self):
-        game = self.combo_game.currentText()
-        msg = f"[Storage] Reset config for {game} (planned with backup soon)"
-        self._log(msg)
-        log_mgr.log("Game", msg, level="info")
-
-    # ---- Profiles ----
-    def _apply_current_profile(self):
-        game = self.combo_game.currentText()
-        if game == "Fortnite":
-            ok, msg = self.opt.apply_fortnite_gaming_preset()
-            self._log_result("[Profile] Fortnite Gaming preset", ok, msg)
-            log_mgr.log("Game", "Fortnite Gaming preset applied via GamePage.", level="ok" if ok else "warn", bubble=ok)
-        else:
-            ok1, msg1 = self.opt.apply_game_priority(game, "HIGH")
-            ok2, msg2 = self.opt.apply_game_affinity_recommended(game)
-            self._log_result(f"[Profile] {game} priority preset", ok1, msg1)
-            self._log_result(f"[Profile] {game} core preset", ok2, msg2)
-            log_mgr.log("Game", f"{game}: profile applied (HIGH + recommended cores).", level="ok" if (ok1 and ok2) else "warn")
-
-    # -------------------------------------------------
-    # SMART GAME MODE (AUTO ENGINE)
-    # -------------------------------------------------
-    def _toggle_auto(self):
-        self.auto_enabled = not self.auto_enabled
-        game = self.combo_game.currentText()
-
-        if self.auto_enabled:
-            self.auto_timer.start()
-            self.btn_auto.setText("Smart Game Mode: ON")
-            self._log(
-                f"[AutoGame] Smart Game Mode enabled for '{game}'. "
-                "QrsTweaks will auto-apply presets when the game starts."
-            )
-            log_mgr.log("Game", f"Smart Game Mode enabled for {game}.", level="info", bubble=True)
-            self._auto_last_pid = None
-        else:
-            self.auto_timer.stop()
-            self.btn_auto.setText("Smart Game Mode: OFF")
-            self._log(f"[AutoGame] Smart Game Mode disabled for '{game}'.")
-            log_mgr.log("Game", f"Smart Game Mode disabled for {game}.", level="info")
-            self._auto_last_pid = None
-
-    def _auto_tick(self):
-        if not self.auto_enabled:
-            return
-
-        game = self.combo_game.currentText()
-        if game == "Custom Game…":
-            return
-
-        pid = self.opt.get_game_pid_or_none(game)
-
-        if pid is None:
-            if self._auto_last_pid is not None:
-                self._log(f"[AutoGame] '{game}' no longer detected.")
-                log_mgr.log("Game", f"{game} no longer detected (Smart Mode).", level="info")
-                self._auto_last_pid = None
-            return
-
-        if self._auto_last_pid != pid:
-            self._auto_last_pid = pid
-            self._log(f"[AutoGame] Detected '{game}' (PID {pid}). Applying presets…")
-            log_mgr.log("Game", f"{game} detected (PID {pid}), applying Smart presets.", level="ok", bubble=True)
-
-            if game.startswith("Fortnite"):
-                ok, msg = self.opt.apply_fortnite_gaming_preset()
-                self._log_result("[AutoGame] Fortnite Gaming preset", ok, msg)
-                log_mgr.log("Game", "Fortnite Gaming preset auto-applied.", level="ok" if ok else "warn")
-            else:
-                ok1, msg1 = self.opt.apply_game_priority(game, "HIGH")
-                ok2, msg2 = self.opt.apply_game_affinity_recommended(game)
-                self._log_result(f"[AutoGame] {game} → HIGH priority", ok1, msg1)
-                self._log_result(f"[AutoGame] {game} → recommended cores", ok2, msg2)
-                log_mgr.log("Game", f"{game}: Smart Mode applied (HIGH + recommended cores).", level="ok" if (ok1 and ok2) else "warn")
+        game = self._current_game_label()
+        self._log(f"[Storage] Reset config for {game} (coming soon, with backup)")
 
     # -------------------------------------------------
     # LOGGING HELPERS
     # -------------------------------------------------
     def _log(self, text: str):
-        safe = (
-            text.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-        )
-        self.log.append(f"<span style='color:#DDE1EA'>{safe}</span>")
+        self.log.append(f"<span style='color:#DDE1EA'>{text}</span>")
 
     def _log_result(self, label: str, ok: bool, msg: str):
         color = "#44dd44" if ok else "#ff4444"
@@ -462,11 +347,6 @@ class GamesPage(QWidget):
                .replace("<", "&lt;")
                .replace(">", "&gt;")
         )
-        safe_label = (
-            label.replace("&", "&amp;")
-                 .replace("<", "&lt;")
-                 .replace(">", "&gt;")
-        )
         self.log.append(
-            f"<span style='color:{color}'>{safe_label}: {safe}</span>"
+            f"<span style='color:{color}'>{label}: {safe}</span>"
         )

@@ -5,8 +5,14 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Tuple
+
+try:
+    import psutil  # type: ignore
+except ImportError:  # pragma: no cover - optional
+    psutil = None
 
 
 class ServiceController:
@@ -15,7 +21,7 @@ class ServiceController:
 
     Responsibilities:
       - Start the daemon as a detached process
-      - Stop it using a SIGTERM / kill
+      - Stop it cleanly (terminate + wait, then hard kill if needed)
       - Check if it's still running
       - Maintain a .runtime/daemon.pid file
     """
@@ -34,7 +40,8 @@ class ServiceController:
             self.root / "src" / "qrs" / "service" / "daemon_main.py"
         )
 
-        self.logs_dir = self.root / "logs"
+        # Keep log path consistent with repo layout (capital L)
+        self.logs_dir = self.root / "Logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = self.logs_dir / "daemon.log"
 
@@ -64,6 +71,29 @@ class ServiceController:
         except Exception:
             pass
 
+    def _process_exists(self, pid: int) -> bool:
+        """
+        Check if process exists and is alive.
+        """
+        if pid <= 0:
+            return False
+
+        if psutil is not None:
+            try:
+                p = psutil.Process(pid)  # type: ignore[attr-defined]
+                return p.is_running()
+            except psutil.NoSuchProcess:  # type: ignore[attr-defined]
+                return False
+            except Exception:
+                return False
+
+        # Fallback: signal 0
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
     # ---------------------------------------------------------
     # Public API used by the UI
     # ---------------------------------------------------------
@@ -75,13 +105,19 @@ class ServiceController:
         if pid is None:
             return False, "No PID file present; daemon not started yet."
 
-        try:
-            # signal 0 just checks if the process exists
-            os.kill(pid, 0)
-        except OSError as e:
-            return False, f"Process {pid} does not appear to be running: {e}"
-        else:
-            return True, f"Daemon process {pid} is running."
+        if not self._process_exists(pid):
+            self._clear_pid()
+            return False, f"Process {pid} does not appear to be running."
+
+        detail = f"Daemon process {pid} is running."
+        if psutil is not None:
+            try:
+                p = psutil.Process(pid)  # type: ignore[attr-defined]
+                detail = f"Daemon process {pid} is running (name={p.name()})."
+            except Exception:
+                pass
+
+        return True, detail
 
     def start_daemon(self) -> Tuple[bool, str]:
         """
@@ -98,38 +134,117 @@ class ServiceController:
             # Append logs, don't overwrite
             log_f = self.log_file.open("a", encoding="utf-8")
 
-            # Detach reasonably; keep it simple and cross-platform
+            creationflags = 0
+            # On Windows, detach a bit more cleanly
+            if os.name == "nt":
+                creationflags = (
+                    subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+                    | subprocess.DETACHED_PROCESS       # type: ignore[attr-defined]
+                )
+
             proc = subprocess.Popen(
                 [sys.executable, "-u", str(self.daemon_script)],
                 stdout=log_f,
                 stderr=log_f,
                 cwd=str(self.root),
                 close_fds=True,
+                creationflags=creationflags,
             )
+
             self._write_pid(proc.pid)
             return True, f"Started daemon (PID {proc.pid}). Logs: {self.log_file}"
         except Exception as e:
             return False, f"Failed to start daemon: {e!r}"
 
-    def stop_daemon(self) -> Tuple[bool, str]:
+    def stop_daemon(self, timeout: float = 10.0) -> Tuple[bool, str]:
         """
         Try to terminate the daemon process using the stored PID.
+
+        Strategy:
+          - If psutil is available:
+              terminate() → wait up to `timeout` → kill() fallback
+          - Else:
+              os.kill(SIGTERM) / taskkill on Windows, poll until gone
         """
         pid = self._read_pid()
         if pid is None:
             return False, "No daemon PID file found; nothing to stop."
 
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
+        if not self._process_exists(pid):
             self._clear_pid()
-            return False, f"Process {pid} was not running."
+            return False, f"Process {pid} is not running."
+
+        # psutil path (preferred)
+        if psutil is not None:
+            try:
+                proc = psutil.Process(pid)  # type: ignore[attr-defined]
+            except psutil.NoSuchProcess:  # type: ignore[attr-defined]
+                self._clear_pid()
+                return False, f"Process {pid} is not running."
+
+            try:
+                proc.terminate()
+            except Exception as e:
+                return False, f"Failed to send terminate signal to {pid}: {e!r}"
+
+            # wait for graceful exit
+            try:
+                proc.wait(timeout=timeout)  # type: ignore[attr-defined]
+            except Exception:
+                # Fallback – hard kill
+                if os.name == "nt":
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/PID", str(pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                        )
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
+
+                # small grace period
+                time.sleep(1.0)
+
+            # Final check
+            if self._process_exists(pid):
+                return False, "Daemon did not exit within timeout."
+            else:
+                self._clear_pid()
+                return True, f"Daemon (PID {pid}) stopped."
+
+        # No psutil: fallback behaviour
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                os.kill(pid, signal.SIGTERM)
         except Exception as e:
             return False, f"Failed to send terminate signal to {pid}: {e!r}"
 
-        # Best-effort cleanup
-        self._clear_pid()
-        return True, f"Stop signal sent to daemon (PID {pid})."
+        # Poll for exit
+        end = time.time() + timeout
+        while time.time() < end:
+            if not self._process_exists(pid):
+                self._clear_pid()
+                return True, f"Daemon (PID {pid}) stopped."
+            time.sleep(0.5)
+
+        if not self._process_exists(pid):
+            self._clear_pid()
+            return True, f"Daemon (PID {pid}) stopped."
+
+        return False, "Daemon did not exit within timeout."
 
     def restart_daemon(self) -> Tuple[bool, str]:
         """
@@ -140,3 +255,26 @@ class ServiceController:
         if ok:
             return True, f"Daemon restarted successfully. {msg}"
         return False, f"Daemon restart failed. {msg}"
+
+
+# ---------------------------------------------------------
+# Module-level helpers for simple imports
+# ---------------------------------------------------------
+
+_default_controller = ServiceController()
+
+
+def start_daemon() -> Tuple[bool, str]:
+    return _default_controller.start_daemon()
+
+
+def stop_daemon(timeout: float = 10.0) -> Tuple[bool, str]:
+    return _default_controller.stop_daemon(timeout=timeout)
+
+
+def restart_daemon() -> Tuple[bool, str]:
+    return _default_controller.restart_daemon()
+
+
+def daemon_running() -> Tuple[bool, str]:
+    return _default_controller.is_daemon_running()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import time
+from typing import List
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -10,42 +10,65 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
-    QPushButton,
     QProgressBar,
+    QGridLayout,
 )
 from PySide6.QtCore import Qt, QTimer
 
 from app.ui.widgets.card import Card
-from src.qrs.modules.windows_optim import WindowsOptimizer
-from src.qrs.modules.game_optim import GameOptimizer
-from src.qrs.core.log_manager import log_mgr
+from src.qrs.modules.telemetry import Telemetry
 
-try:
-    import psutil  # type: ignore
-except ImportError:
-    psutil = None
+
+def _format_gib(bytes_value: int) -> str:
+    if bytes_value <= 0:
+        return "0.0 GiB"
+    return f"{bytes_value / (1024 ** 3):.1f} GiB"
+
+
+def _format_uptime(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    days = int(seconds // 86400)
+    seconds %= 86400
+    hours = int(seconds // 3600)
+    seconds %= 3600
+    minutes = int(seconds // 60)
+
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    parts.append(f"{minutes}m")
+    return " ".join(parts)
 
 
 class DashboardPage(QWidget):
     """
-    QrsTweaks Dashboard
+    Live telemetry dashboard with bar-flow styling.
 
-    Branded home screen with:
-      - System overview (CPU / RAM / Disk)
-      - Game / Smart Mode hints
-      - Quick actions into Windows/Game optimizers
+    Sections:
+      - CPU usage (total + per-core bars)
+      - Memory usage
+      - System summary (uptime, processes)
+      - GPU (best effort, optional)
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setStyleSheet("background: transparent;")
 
-        # Backends for quick actions
-        self.win_opt = WindowsOptimizer()
-        self.game_opt = GameOptimizer()
+        self.telemetry = Telemetry()
+        initial = self.telemetry.snapshot()
+        self._initial_cpu_cores = len(initial.get("cpu_per_core") or [])
+
+        if self._initial_cpu_cores <= 0:
+            # Reasonable default – will be resized once real data arrives
+            self._initial_cpu_cores = 4
+
+        self._core_bars: List[QProgressBar] = []
 
         # -------------------------------------------------
-        # SCROLL WRAPPER
+        # Scroll wrapper (match WindowsPage / GamesPage)
         # -------------------------------------------------
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -62,303 +85,318 @@ class DashboardPage(QWidget):
         root.setSpacing(16)
 
         # -------------------------------------------------
-        # TITLE
+        # Title
         # -------------------------------------------------
-        title = QLabel("QrsTweaks Dashboard")
-        title.setStyleSheet(
-            "font-size: 24pt; color: #F3E8FF; font-weight: 700; "
-            "letter-spacing: 0.5px;"
-        )
+        title = QLabel("System Dashboard")
+        title.setStyleSheet("font-size: 22pt; color: #DDE1EA; font-weight: 700;")
         root.addWidget(title)
 
-        subtitle = QLabel(
-            "High-level view of your system, game readiness, and quick actions."
-        )
-        subtitle.setStyleSheet("color: #A48BFF; font-size: 10pt;")
-        subtitle.setWordWrap(True)
-        root.addWidget(subtitle)
+        # -------------------------------------------------
+        # CPU CARD
+        # -------------------------------------------------
+        cpu_card = Card("CPU Usage")
+        cpu_body = cpu_card.body()
+
+        self.lbl_cpu_total = QLabel("CPU: -- %")
+        self.lbl_cpu_total.setStyleSheet("font-size: 16pt; color: #F2F5FF;")
+        cpu_body.addWidget(self.lbl_cpu_total)
+
+        self.lbl_cpu_meta = QLabel("Cores: -- | Processes: --")
+        self.lbl_cpu_meta.setStyleSheet("color:#AAB0BC; font-size: 9pt;")
+        cpu_body.addWidget(self.lbl_cpu_meta)
+
+        grid = QGridLayout()
+        grid.setSpacing(6)
+
+        for i in range(self._initial_cpu_cores):
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            bar.setFormat(f"Core {i}  %p%")
+            bar.setAlignment(Qt.AlignCenter)
+            bar.setStyleSheet(
+                """
+                QProgressBar {
+                    border: 1px solid #2b2f3b;
+                    border-radius: 4px;
+                    background: #151821;
+                    color: #DDE1EA;
+                    text-align: center;
+                    padding: 1px;
+                    min-height: 18px;
+                }
+                QProgressBar::chunk {
+                    border-radius: 4px;
+                    background: qlineargradient(
+                        x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #5f4bff,
+                        stop:1 #ff3cac
+                    );
+                }
+                """
+            )
+            self._core_bars.append(bar)
+            row = i // 2
+            col = i % 2
+            grid.addWidget(bar, row, col)
+
+        cpu_body.addLayout(grid)
+        root.addWidget(cpu_card)
 
         # -------------------------------------------------
-        # SYSTEM OVERVIEW CARD
+        # MEMORY CARD
         # -------------------------------------------------
-        sys_card = Card("System Overview")
-        sv = sys_card.body()
+        mem_card = Card("Memory")
+        mem_body = mem_card.body()
 
-        row_top = QHBoxLayout()
-        row_top.setSpacing(18)
+        row_mem = QHBoxLayout()
+        row_mem.setSpacing(12)
 
-        # CPU widget
-        cpu_box = QWidget()
-        cpu_layout = QVBoxLayout(cpu_box)
-        cpu_layout.setContentsMargins(0, 0, 0, 0)
-        cpu_layout.setSpacing(4)
+        self.lbl_ram_summary = QLabel("RAM: -- / -- (--)")
+        self.lbl_ram_summary.setStyleSheet("color:#DDE1EA; font-size: 10pt;")
 
-        self.lbl_cpu = QLabel("CPU: -- %")
-        self.lbl_cpu.setStyleSheet("color:#F8EFFF; font-size:11pt;")
-        self.bar_cpu = QProgressBar()
-        self._style_bar(self.bar_cpu)
+        row_mem.addWidget(self.lbl_ram_summary)
+        row_mem.addStretch()
 
-        cpu_layout.addWidget(self.lbl_cpu)
-        cpu_layout.addWidget(self.bar_cpu)
+        mem_body.addLayout(row_mem)
 
-        # RAM widget
-        ram_box = QWidget()
-        ram_layout = QVBoxLayout(ram_box)
-        ram_layout.setContentsMargins(0, 0, 0, 0)
-        ram_layout.setSpacing(4)
-
-        self.lbl_ram = QLabel("RAM: -- %")
-        self.lbl_ram.setStyleSheet("color:#F8EFFF; font-size:11pt;")
         self.bar_ram = QProgressBar()
-        self._style_bar(self.bar_ram)
-
-        ram_layout.addWidget(self.lbl_ram)
-        ram_layout.addWidget(self.bar_ram)
-
-        # DISK widget
-        disk_box = QWidget()
-        disk_layout = QVBoxLayout(disk_box)
-        disk_layout.setContentsMargins(0, 0, 0, 0)
-        disk_layout.setSpacing(4)
-
-        self.lbl_disk = QLabel("Disk C: -- % free")
-        self.lbl_disk.setStyleSheet("color:#F8EFFF; font-size:11pt;")
-        self.bar_disk = QProgressBar()
-        self._style_bar(self.bar_disk)
-
-        disk_layout.addWidget(self.lbl_disk)
-        disk_layout.addWidget(self.bar_disk)
-
-        row_top.addWidget(cpu_box)
-        row_top.addWidget(ram_box)
-        row_top.addWidget(disk_box)
-
-        sv.addLayout(row_top)
-
-        # Status line / note about psutil
-        self.lbl_sys_note = QLabel("")
-        self.lbl_sys_note.setStyleSheet("color:#9FA8C7; font-size:9pt;")
-        self.lbl_sys_note.setWordWrap(True)
-        sv.addWidget(self.lbl_sys_note)
-
-        root.addWidget(sys_card)
-
-        # -------------------------------------------------
-        # GAME / SMART MODE OVERVIEW
-        # -------------------------------------------------
-        game_card = Card("Gaming & Smart Modes")
-        gv = game_card.body()
-
-        self.lbl_game_hint = QLabel(
-            "Use the Game Optimizer tab to configure Smart Game Mode for Fortnite, "
-            "Valorant, Minecraft, and more.\n\n"
-            "When Smart Game Mode is enabled, QrsTweaks will:\n"
-            "  • Detect when the selected game starts\n"
-            "  • Apply safe CPU priority + core affinity presets\n"
-            "  • For Fortnite: apply the Fortnite Gaming preset"
+        self.bar_ram.setRange(0, 100)
+        self.bar_ram.setValue(0)
+        self.bar_ram.setFormat("%p%")
+        self.bar_ram.setAlignment(Qt.AlignCenter)
+        self.bar_ram.setStyleSheet(
+            """
+            QProgressBar {
+                border: 1px solid #2b2f3b;
+                border-radius: 4px;
+                background: #151821;
+                color: #DDE1EA;
+                text-align: center;
+                padding: 1px;
+                min-height: 20px;
+            }
+            QProgressBar::chunk {
+                border-radius: 4px;
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #21d4fd,
+                    stop:1 #b721ff
+                );
+            }
+            """
         )
-        self.lbl_game_hint.setStyleSheet("color:#D3D8F5; font-size:9pt;")
-        self.lbl_game_hint.setWordWrap(True)
-        gv.addWidget(self.lbl_game_hint)
+        mem_body.addWidget(self.bar_ram)
 
-        root.addWidget(game_card)
+        root.addWidget(mem_card)
 
         # -------------------------------------------------
-        # QUICK ACTIONS
+        # GPU + SYSTEM (ROW)
         # -------------------------------------------------
-        qa_card = Card("Quick Actions")
-        qv = qa_card.body()
+        row_bottom = QHBoxLayout()
+        row_bottom.setSpacing(12)
 
-        row_q1 = QHBoxLayout()
-        row_q1.setSpacing(10)
+        # GPU card
+        gpu_card = Card("GPU (best effort)")
+        gpu_body = gpu_card.body()
 
-        self.btn_quick_scan = QPushButton("Run Quick Scan (Windows)")
-        self.btn_quick_scan.setMinimumHeight(32)
+        self.lbl_gpu_usage = QLabel("GPU: -- %")
+        self.lbl_gpu_usage.setStyleSheet("color:#DDE1EA; font-size: 10pt;")
+        self.lbl_gpu_mem = QLabel("VRAM: -- / --")
+        self.lbl_gpu_mem.setStyleSheet("color:#AAB0BC; font-size: 9pt;")
+        self.lbl_gpu_temp = QLabel("Temp: -- °C")
+        self.lbl_gpu_temp.setStyleSheet("color:#AAB0BC; font-size: 9pt;")
 
-        self.btn_deep_cleanup = QPushButton("Run Deep Cleanup")
-        self.btn_deep_cleanup.setMinimumHeight(32)
+        gpu_body.addWidget(self.lbl_gpu_usage)
+        gpu_body.addWidget(self.lbl_gpu_mem)
+        gpu_body.addWidget(self.lbl_gpu_temp)
 
-        self.btn_fortnite_preset = QPushButton("Apply Fortnite Gaming Preset")
-        self.btn_fortnite_preset.setMinimumHeight(32)
+        row_bottom.addWidget(gpu_card)
 
-        row_q1.addWidget(self.btn_quick_scan)
-        row_q1.addWidget(self.btn_deep_cleanup)
-        row_q1.addWidget(self.btn_fortnite_preset)
+        # System card
+        sys_card = Card("System")
+        sys_body = sys_card.body()
 
-        qv.addLayout(row_q1)
+        self.lbl_uptime = QLabel("Uptime: --")
+        self.lbl_uptime.setStyleSheet("color:#DDE1EA; font-size: 10pt;")
+        self.lbl_proc_count = QLabel("Processes: --")
+        self.lbl_proc_count.setStyleSheet("color:#AAB0BC; font-size: 9pt;")
 
-        self.lbl_quick_info = QLabel(
-            "Quick actions are safe, best-effort tweaks that operate like the Windows "
-            "and Game optimizer pages but with minimal UI."
-        )
-        self.lbl_quick_info.setStyleSheet("color:#9FA8C7; font-size:9pt;")
-        self.lbl_quick_info.setWordWrap(True)
-        qv.addWidget(self.lbl_quick_info)
+        sys_body.addWidget(self.lbl_uptime)
+        sys_body.addWidget(self.lbl_proc_count)
 
-        self.dash_log = QTextEditLike()
-        qv.addWidget(self.dash_log.as_widget())
+        row_bottom.addWidget(sys_card)
 
-        root.addWidget(qa_card)
+        root.addLayout(row_bottom)
 
+        # Stretch so content hugs top
         root.addStretch()
 
+        # Attach scroll to self
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(scroll)
 
-        # -------------------------------------------------
-        # TIMERS & SIGNALS
-        # -------------------------------------------------
-        self._setup_signals()
-        self._setup_timers()
+        # Timer for updates (bar-flow style)
+        self._timer = QTimer(self)
+        self._timer.setInterval(500)  # 500ms
+        self._timer.timeout.connect(self._update_telemetry)
+        self._timer.start()
+
+        # One immediate refresh
+        self._update_telemetry()
 
     # -------------------------------------------------
-    # Internal helpers
+    # UPDATE LOOP
     # -------------------------------------------------
-    def _setup_signals(self) -> None:
-        self.btn_quick_scan.clicked.connect(self._do_quick_scan)
-        self.btn_deep_cleanup.clicked.connect(self._do_deep_cleanup)
-        self.btn_fortnite_preset.clicked.connect(self._do_fortnite_preset)
+    def _update_telemetry(self) -> None:
+        data = self.telemetry.snapshot()
 
-    def _setup_timers(self) -> None:
-        self._metric_timer = QTimer(self)
-        self._metric_timer.setInterval(1000)
-        self._metric_timer.timeout.connect(self._refresh_metrics)
-        self._metric_timer.start()
-        self._refresh_metrics()
-
-    def _style_bar(self, bar: QProgressBar) -> None:
-        bar.setTextVisible(False)
-        bar.setRange(0, 100)
-        bar.setStyleSheet(
-            """
-            QProgressBar {
-                border-radius: 6px;
-                background-color: #1A1224;
-                height: 10px;
-            }
-            QProgressBar::Chunk {
-                border-radius: 6px;
-                background-color: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #F472FF, stop:1 #7C3AED
-                );
-            }
-            """
-        )
-
-    # -------------------------------------------------
-    # Metrics
-    # -------------------------------------------------
-    def _refresh_metrics(self) -> None:
-        if psutil is None:
-            self.lbl_cpu.setText("CPU: psutil not installed")
-            self.lbl_ram.setText("RAM: psutil not installed")
-            self.lbl_disk.setText("Disk C: psutil not installed")
-            self.bar_cpu.setValue(0)
+        if not data.get("supported", False):
+            self.lbl_cpu_total.setText("CPU: telemetry not available")
+            self.lbl_cpu_meta.setText("psutil missing or unsupported platform.")
+            self.lbl_ram_summary.setText("RAM: telemetry not available")
             self.bar_ram.setValue(0)
-            self.bar_disk.setValue(0)
-            self.lbl_sys_note.setText(
-                "Install psutil with 'pip install psutil' to enable live metrics."
-            )
+            self.lbl_uptime.setText("Uptime: --")
+            self.lbl_proc_count.setText("Processes: --")
+            self.lbl_gpu_usage.setText("GPU: -- (optional)")
+            self.lbl_gpu_mem.setText("VRAM: -- / --")
+            self.lbl_gpu_temp.setText("Temp: -- °C")
             return
 
-        try:
-            cpu = psutil.cpu_percent(interval=None)  # type: ignore[attr-defined]
-            mem = psutil.virtual_memory()            # type: ignore[attr-defined]
+        # CPU
+        cpu_total = float(data.get("cpu_total", 0.0))
+        per_core = list(data.get("cpu_per_core") or [])
+        proc_count = int(data.get("process_count", 0))
 
-            try:
-                disk = psutil.disk_usage("C:\\")     # type: ignore[attr-defined]
-                disk_free_pct = (disk.free / disk.total) * 100.0
-            except Exception:
-                disk_free_pct = -1.0
+        self.lbl_cpu_total.setText(f"CPU: {cpu_total:.1f} %")
 
-            self.lbl_cpu.setText(f"CPU: {cpu:.0f} %")
-            self.bar_cpu.setValue(int(cpu))
+        core_count = len(per_core)
+        if core_count and core_count != len(self._core_bars):
+            # Rebuild the bars once if the real core count differs
+            self._rebuild_cpu_bars(core_count)
+            # fall through to use updated list
 
-            self.lbl_ram.setText(f"RAM: {mem.percent:.0f} %")
-            self.bar_ram.setValue(int(mem.percent))
+        for i, bar in enumerate(self._core_bars):
+            value = int(per_core[i]) if i < len(per_core) else 0
+            bar.setValue(max(0, min(100, value)))
 
-            if disk_free_pct >= 0:
-                used_pct = 100.0 - disk_free_pct
-                self.lbl_disk.setText(f"Disk C: {disk_free_pct:.0f} % free")
-                self.bar_disk.setValue(int(used_pct))
-            else:
-                self.lbl_disk.setText("Disk C: unknown")
-                self.bar_disk.setValue(0)
+        self.lbl_cpu_meta.setText(
+            f"Cores: {core_count or '--'} | Processes: {proc_count or '--'}"
+        )
 
-            self.lbl_sys_note.setText(
-                "Metrics update every second. High CPU/RAM under heavy loads is normal."
+        # RAM
+        ram_used = int(data.get("ram_used", 0))
+        ram_total = int(data.get("ram_total", 0))
+        ram_percent = float(data.get("ram_percent", 0.0))
+
+        self.bar_ram.setValue(int(ram_percent))
+        self.lbl_ram_summary.setText(
+            f"RAM: {_format_gib(ram_used)} / {_format_gib(ram_total)} ({ram_percent:.1f}%)"
+        )
+
+        # System
+        uptime = float(data.get("uptime_sec", 0.0))
+        self.lbl_uptime.setText(f"Uptime: {_format_uptime(uptime)}")
+        self.lbl_proc_count.setText(f"Processes: {proc_count}")
+
+        # GPU
+        gpu_usage = data.get("gpu_usage")
+        gpu_temp = data.get("gpu_temp")
+        gpu_mem_used = data.get("gpu_mem_used")
+        gpu_mem_total = data.get("gpu_mem_total")
+
+        if gpu_usage is None:
+            self.lbl_gpu_usage.setText("GPU: n/a (GPUtil not installed)")
+        else:
+            self.lbl_gpu_usage.setText(f"GPU: {gpu_usage:.1f} %")
+
+        if gpu_mem_used is None or gpu_mem_total is None or gpu_mem_total == 0:
+            self.lbl_gpu_mem.setText("VRAM: -- / --")
+        else:
+            self.lbl_gpu_mem.setText(
+                f"VRAM: {gpu_mem_used:.1f} / {gpu_mem_total:.1f} GiB"
             )
-        except Exception as e:
-            self.lbl_sys_note.setText(f"Error gathering metrics: {e!r}")
+
+        if gpu_temp is None or gpu_temp <= 0:
+            self.lbl_gpu_temp.setText("Temp: -- °C")
+        else:
+            self.lbl_gpu_temp.setText(f"Temp: {gpu_temp:.0f} °C")
 
     # -------------------------------------------------
-    # Quick actions
+    # INTERNAL: rebuild CPU bars if core-count changes
     # -------------------------------------------------
-    def _do_quick_scan(self) -> None:
-        try:
-            text = self.win_opt.quick_scan()
-            self.dash_log.append("[Windows] Quick Scan:\n" + text)
-            log_mgr.log("Dashboard", "Quick Scan invoked from Dashboard.", level="info")
-        except Exception as e:
-            self.dash_log.append(f"[Windows] Quick Scan failed: {e!r}")
-            log_mgr.log("Dashboard", f"Quick Scan failed: {e!r}", level="error", bubble=True)
+    def _rebuild_cpu_bars(self, core_count: int) -> None:
+        # Find the grid layout inside the CPU card body
+        # (we know the structure: title, meta, grid)
+        scroll = self.findChild(QScrollArea)
+        if not scroll:
+            return
+        container = scroll.widget()
+        if not container:
+            return
+        root: QVBoxLayout = container.layout()  # type: ignore[assignment]
+        if root is None:
+            return
 
-    def _do_deep_cleanup(self) -> None:
-        try:
-            n = self.win_opt.deep_cleanup()
-            msg = f"[Windows] Deep Cleanup removed ~{n} items."
-            self.dash_log.append(msg)
-            log_mgr.log("Dashboard", f"Deep Cleanup removed ~{n} items (from Dashboard).", level="ok")
-        except Exception as e:
-            self.dash_log.append(f"[Windows] Deep Cleanup failed: {e!r}")
-            log_mgr.log("Dashboard", f"Deep Cleanup failed: {e!r}", level="error", bubble=True)
+        # CPU card is the second widget (title, then CPU card)
+        # but safer to search by type Card
+        cpu_card = container.findChild(Card, None)
+        if cpu_card is None:
+            return
 
-    def _do_fortnite_preset(self) -> None:
-        try:
-            ok, msg = self.game_opt.apply_fortnite_gaming_preset()
-            prefix = "[Game] Fortnite Gaming preset"
-            if ok:
-                self.dash_log.append(prefix + " applied successfully:\n" + msg)
-            else:
-                self.dash_log.append(prefix + " had warnings:\n" + msg)
-            log_mgr.log("Dashboard", "Fortnite Gaming preset applied from Dashboard.", level="ok" if ok else "warn", bubble=ok)
-        except Exception as e:
-            self.dash_log.append(f"[Game] Fortnite preset failed: {e!r}")
-            log_mgr.log("Dashboard", f"Fortnite preset failed from Dashboard: {e!r}", level="error", bubble=True)
+        cpu_body_layout = cpu_card.body()
+        # Layout children: [lbl_cpu_total, lbl_cpu_meta, grid]
+        # We replace the last item (grid) with a new grid.
+        if cpu_body_layout.count() < 3:
+            return
 
+        old_item = cpu_body_layout.itemAt(2)
+        old_layout = old_item.layout() if old_item is not None else None
+        if old_layout is not None:
+            # Remove old layout and its widgets
+            while old_layout.count():
+                it = old_layout.takeAt(0)
+                w = it.widget()
+                if w is not None:
+                    w.deleteLater()
+            cpu_body_layout.removeItem(old_layout)
 
-class QTextEditLike:
-    """
-    Tiny helper wrapper for a QTextEdit-like log area.
-    """
-    from PySide6.QtWidgets import QTextEdit
+        new_grid = QGridLayout()
+        new_grid.setSpacing(6)
 
-    def __init__(self):
-        self._w = self.QTextEdit()
-        self._w.setReadOnly(True)
-        self._w.setMinimumHeight(140)
-        self._w.setStyleSheet(
-            """
-            QTextEdit {
-                background-color: #0A0710;
-                color: #E9E4FF;
-                border-radius: 8px;
-                border: 1px solid #2A1744;
-                font-size: 9pt;
-            }
-            """
-        )
+        self._core_bars.clear()
+        for i in range(core_count):
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            bar.setFormat(f"Core {i}  %p%")
+            bar.setAlignment(Qt.AlignCenter)
+            bar.setStyleSheet(
+                """
+                QProgressBar {
+                    border: 1px solid #2b2f3b;
+                    border-radius: 4px;
+                    background: #151821;
+                    color: #DDE1EA;
+                    text-align: center;
+                    padding: 1px;
+                    min-height: 18px;
+                }
+                QProgressBar::chunk {
+                    border-radius: 4px;
+                    background: qlineargradient(
+                        x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #5f4bff,
+                        stop:1 #ff3cac
+                    );
+                }
+                """
+            )
+            self._core_bars.append(bar)
+            row = i // 2
+            col = i % 2
+            new_grid.addWidget(bar, row, col)
 
-    def as_widget(self):
-        return self._w
-
-    def append(self, text: str) -> None:
-        safe = (
-            text.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-        )
-        self._w.append(f"<span style='color:#E9E4FF'>{safe}</span>")
+        cpu_body_layout.addLayout(new_grid)

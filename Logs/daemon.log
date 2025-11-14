@@ -1,0 +1,6 @@
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+Traceback (most recent call last):
+  File "<frozen codecs>", line 186, in __init__
+KeyboardInterrupt
+{"ts": 1763085548.2023137, "event": "daemon_started", "info": {}}

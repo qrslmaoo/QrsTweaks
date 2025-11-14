@@ -13,20 +13,28 @@ global Windows optimizer. It currently includes:
 - DirectX shader cache cleanup
 - Process detection engine (Phase 4A)
 - Per-game CPU priority & CPU affinity helpers (Phase 4B)
-- Generic per-game storage helpers (Phase 4C)
+- Game Profiles v2 (.qrsgame) with schema v1.0
+
+Everything here is designed to be **safe by default**:
+- Only touches known game directories or well-known cache locations
+- Fails gracefully on non-Windows systems
 """
 
+import json
 import os
 import shutil
 import subprocess
 import platform
+from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Dict, NamedTuple, List
+from typing import Tuple, Dict, NamedTuple, List, Optional
 
 try:
     import psutil  # type: ignore
 except ImportError:  # pragma: no cover - optional
     psutil = None
+
+from .game_profile import GameProfile
 
 
 class ProcessInfo(NamedTuple):
@@ -71,12 +79,20 @@ class GameOptimizer:
             apply_game_priority(...)
             apply_game_affinity_recommended(...)
             apply_game_affinity_all_cores(...)
-            clean_game_temp(...)
-            clean_game_crashes(...)
-            clean_game_shaders(...)
-            reset_game_config(...)
-            disable_nagle_for_game(...)
+            apply_profile_for_game(...)
+            export_profile_to_file(...)
+            import_profile_from_file(...)
     """
+
+    def __init__(self) -> None:
+        # Profiles live under: <project_root>/profiles/games/*.qrsgame
+        self.root = Path.cwd()
+        self.profiles_dir = self.root / "profiles" / "games"
+        try:
+            self.profiles_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # Non-fatal; we will error at write-time instead
+            pass
 
     # =========================================================
     #   XBOX GAME BAR / DVR
@@ -143,7 +159,6 @@ class GameOptimizer:
             logs      -> Saved/Logs
             crashes   -> Saved/Crashes
             shaders   -> Saved/ShaderCaches (approximate)
-            config    -> Saved/Config/WindowsClient
         """
         lad = os.environ.get("LOCALAPPDATA")
         if not lad:
@@ -154,7 +169,6 @@ class GameOptimizer:
                 "logs": dummy / "Logs",
                 "crashes": dummy / "Crashes",
                 "shaders": dummy / "ShaderCaches",
-                "config": dummy / "Config" / "WindowsClient",
             }
 
         base = Path(lad) / "FortniteGame" / "Saved"
@@ -163,7 +177,6 @@ class GameOptimizer:
             "logs": base / "Logs",
             "crashes": base / "Crashes",
             "shaders": base / "ShaderCaches",
-            "config": base / "Config" / "WindowsClient",
         }
 
     def _delete_dir_contents(self, p: Path) -> int:
@@ -303,6 +316,14 @@ class GameOptimizer:
     # =========================================================
     #   PROCESS DETECTION ENGINE (Phase 4A)
     # =========================================================
+    #
+    # This layer is used by:
+    #   - Per-game CPU priority tweaks
+    #   - Per-game Nagle / latency presets
+    #   - Any "while game is running" features
+    #
+    # It does NOT auto-scan or permanently monitor anything;
+    # it only looks for processes when explicitly called.
 
     def _game_to_process_names(self, game_label: str) -> list[str]:
         """
@@ -382,6 +403,19 @@ class GameOptimizer:
     ) -> Tuple[bool, str, ProcessInfo | None]:
         """
         Core entry for the rest of the optimizer.
+
+        Args:
+            game_label: Text shown in the Game combobox
+            timeout_sec: How long to wait for the game to appear
+                         0 = no waiting, just one scan
+            poll_interval: How often to recheck while waiting
+
+        Returns:
+            (ok, message, ProcessInfo or None)
+
+        Examples of 'ok':
+            True,  "Found FortniteClient-Win64-Shipping.exe (PID 1234)", ProcessInfo(...)
+            False, "No matching process found for Fortnite", None
         """
         ok, msg = self._is_psutil_ready()
         if not ok:
@@ -431,6 +465,11 @@ class GameOptimizer:
     ) -> Tuple[bool, str, ProcessInfo | None]:
         """
         High-level helper: wait up to timeout_sec for the game to appear.
+
+        Intended use:
+            ok, msg, proc = self.wait_for_game("Fortnite", timeout_sec=60)
+            if ok:
+                # bump priority, tweak network, etc.
         """
         return self.find_game_process(
             game_label=game_label,
@@ -442,6 +481,8 @@ class GameOptimizer:
         """
         Single-shot: return a PID for the selected game if it's running,
         or None if not.
+
+        No waiting, no retries.
         """
         ok, _, proc = self.find_game_process(
             game_label=game_label,
@@ -589,147 +630,187 @@ class GameOptimizer:
         return False, msg
 
     # =========================================================
-    #   GENERIC GAME STORAGE HELPERS (Phase 4C)
+    #   GAME PROFILES V2 (.qrsgame)
     # =========================================================
 
-    def _game_root_path(self, game_label: str) -> Path | None:
-        """
-        Best-effort guess at a per-game 'root' folder for temp / config.
-
-        This is intentionally conservative and only touches user-space
-        locations under %LOCALAPPDATA% / %APPDATA%.
-        """
+    def _profile_slug(self, game_label: str) -> str:
         label = (game_label or "").strip().lower()
-        lad = os.environ.get("LOCALAPPDATA") or ""
-        rad = os.environ.get("APPDATA") or ""
+        if not label:
+            label = "unknown"
+        # Strip unicode ellipsis and dots, normalize spaces
+        label = label.replace("…", "")
+        label = label.replace("...", "")
+        slug = label.replace(" ", "_")
+        return slug
 
-        if not lad and not rad:
-            return None
+    def _profile_default_path(self, game_label: str) -> Path:
+        slug = self._profile_slug(game_label)
+        return self.profiles_dir / f"{slug}.qrsgame"
 
-        lad_p = Path(lad) if lad else None
-        rad_p = Path(rad) if rad else None
+    def build_default_profile(self, game_label: str) -> GameProfile:
+        names = self._game_to_process_names(game_label)
+        return GameProfile.default_for_game(game_label, names)
 
-        if label.startswith("fortnite"):
-            paths = self._fortnite_paths()
-            return paths["base"]
-
-        if label.startswith("minecraft"):
-            # Classic Java path
-            if rad_p is not None:
-                return rad_p / ".minecraft"
-            return None
-
-        # For now, other games are not guessed; we keep it safe.
-        return None
-
-    def clean_game_temp(self, game_label: str) -> Tuple[bool, str]:
+    def load_profile_for_game(self, game_label: str) -> Tuple[bool, str, GameProfile]:
         """
-        Clean per-game temp-like folders where it is safe to do so.
-        Currently implemented for:
-          - Fortnite (Saved/Temp if present)
-          - Minecraft (.minecraft/temp, if present)
+        Load profile from profiles/games/*.qrsgame.
+
+        Returns:
+            (has_file, message, GameProfile)
+            - has_file = True if a real file existed
+            - if no file or error, returns a default profile instead
         """
-        root = self._game_root_path(game_label)
-        if root is None:
-            return False, f"No known safe temp path for '{game_label}'."
-
-        candidates: List[Path] = []
-        label = (game_label or "").strip().lower()
-
-        if label.startswith("fortnite"):
-            paths = self._fortnite_paths()
-            candidates.append(paths["base"] / "Temp")
-        elif label.startswith("minecraft"):
-            candidates.append(root / "temp")
-
-        total = 0
-        for c in candidates:
-            total += self._delete_dir_contents(c)
-
-        if total == 0:
-            return False, f"No temp files removed for '{game_label}' (folders missing or empty)."
-        return True, f"Removed ~{total} temp entries for '{game_label}'."
-
-    def clean_game_crashes(self, game_label: str) -> Tuple[bool, str]:
-        """
-        Clean per-game crash dumps / logs where we know locations.
-        """
-        label = (game_label or "").strip().lower()
-
-        if label.startswith("fortnite"):
-            return self.clean_fortnite_logs_and_crashes()
-
-        # Minecraft, Valorant, CoD, etc. can be added later.
-        return False, f"Crash cleanup not implemented yet for '{game_label}'."
-
-    def clean_game_shaders(self, game_label: str) -> Tuple[bool, str]:
-        """
-        Clean per-game shader / pipeline caches where it is safe.
-        """
-        label = (game_label or "").strip().lower()
-
-        if label.startswith("fortnite"):
-            return self.clean_fortnite_shader_cache()
-
-        # For other engines we hold off until paths are fully mapped.
-        return False, f"Shader cache cleanup not implemented yet for '{game_label}'."
-
-    def reset_game_config(self, game_label: str) -> Tuple[bool, str]:
-        """
-        Reset per-game config by backing up and deleting known config files.
-
-        Currently implemented for:
-          - Fortnite: Saved/Config/WindowsClient/*.ini
-        """
-        label = (game_label or "").strip().lower()
-        if not label.startswith("fortnite"):
-            return False, f"Config reset not implemented yet for '{game_label}'."
-
-        paths = self._fortnite_paths()
-        cfg_dir = paths["config"]
-        if not cfg_dir.exists() or not cfg_dir.is_dir():
-            return False, f"Config directory not found for Fortnite: {cfg_dir}"
-
-        backup_dir = cfg_dir.parent / "WindowsClient.backup"
-        try:
-            backup_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            return False, f"Failed to create backup folder: {e!r}"
-
-        moved = 0
-        for child in cfg_dir.iterdir():
-            if not child.is_file():
-                continue
+        path = self._profile_default_path(game_label)
+        if path.exists():
             try:
-                target = backup_dir / child.name
-                if target.exists():
-                    target.unlink()
-                child.rename(target)
-                moved += 1
-            except Exception:
-                continue
+                data = json.loads(path.read_text(encoding="utf-8"))
+                profile = GameProfile.from_dict(data)
+                return True, f"Loaded profile from {path}", profile
+            except Exception as e:
+                profile = self.build_default_profile(game_label)
+                return False, f"Failed to load profile at {path}, using defaults: {e!r}", profile
+        else:
+            profile = self.build_default_profile(game_label)
+            return False, f"No saved profile for {game_label}; using built-in defaults.", profile
 
-        if moved == 0:
-            return False, f"No config files moved for Fortnite (folder may already be empty): {cfg_dir}"
-        return True, f"Backed up and cleared {moved} config files from {cfg_dir}."
-
-    # =========================================================
-    #   NAGLE / LATENCY PRESET (Phase 4D)
-    # =========================================================
-
-    def disable_nagle_for_game(self, game_label: str) -> Tuple[bool, str]:
+    def save_profile_for_game(self, game_label: str) -> Tuple[bool, str]:
         """
-        For now, this is a thin wrapper that simply logs intent.
-
-        A full per-game Nagle implementation would require mapping
-        game sockets to specific interfaces / ports, which is outside
-        the current scope. Instead we:
-          - Rely on the global Windows optimizer for registry-based Nagle
-          - Log that this preset was requested for visibility
+        Save the current default profile for a game to its default path.
         """
-        label = (game_label or "").strip() or "<unknown>"
-        # This is intentionally a no-op in terms of system changes.
-        return True, (
-            f"Nagle low-latency preset requested for '{label}'. "
-            "Apply global Nagle toggles from the Windows optimizer page for full effect."
-        )
+        _, _, profile = self.load_profile_for_game(game_label)
+        path = self._profile_default_path(game_label)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(profile.to_dict(), indent=2), encoding="utf-8")
+            return True, f"Profile for {game_label} saved to {path}"
+        except Exception as e:
+            return False, f"Failed to save profile for {game_label}: {e!r}"
+
+    def export_profile_to_file(self, game_label: str, path: str) -> Tuple[bool, str]:
+        """
+        Export a game profile (default or saved) to an arbitrary .qrsgame path.
+        """
+        _, _, profile = self.load_profile_for_game(game_label)
+        out = Path(path)
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(profile.to_dict(), indent=2), encoding="utf-8")
+            return True, f"Profile for {game_label} exported to {out}"
+        except Exception as e:
+            return False, f"Failed to export profile for {game_label}: {e!r}"
+
+    def import_profile_from_file(
+        self,
+        path: str,
+        game_label_override: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Import a .qrsgame profile and store it as the default profile for
+        the given game.
+
+        If game_label_override is provided, it forces the label used for
+        storage regardless of what's inside the file.
+        """
+        src = Path(path)
+        if not src.exists():
+            return False, f"Profile file not found: {src}"
+
+        try:
+            data = json.loads(src.read_text(encoding="utf-8"))
+            profile = GameProfile.from_dict(data)
+        except Exception as e:
+            return False, f"Failed to read profile from {src}: {e!r}"
+
+        if game_label_override:
+            profile.game_label = game_label_override
+
+        dst = self._profile_default_path(profile.game_label)
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(json.dumps(profile.to_dict(), indent=2), encoding="utf-8")
+            return True, f"Imported profile for {profile.game_label} into {dst}"
+        except Exception as e:
+            return False, f"Failed to import profile into {dst}: {e!r}"
+
+    def apply_profile_for_game(self, game_label: str) -> Tuple[bool, str]:
+        """
+        Core entry used by UI + daemon.
+
+        Steps:
+          - Load profile (or build default)
+          - Apply:
+              * Game Bar / DVR flags
+              * Fortnite-specific cleanups (if Fortnite)
+              * DirectX cache cleanup
+              * CPU priority
+              * CPU affinity
+              * (future) Nagle per-game
+        """
+        has_file, msg_load, profile = self.load_profile_for_game(game_label)
+        lines: List[str] = []
+        lines.append(msg_load)
+
+        overall_ok = True
+        settings = profile.settings or {}
+        label_lower = profile.game_label.strip().lower()
+
+        # 1) Toggle Game Bar / DVR
+        if settings.get("disable_gamebar", True):
+            ok, msg = self.disable_xbox_game_bar()
+            overall_ok = overall_ok and ok
+            lines.append(f"[GameBar] {msg}")
+
+        if settings.get("disable_gamedvr", True):
+            ok, msg = self.disable_game_dvr()
+            overall_ok = overall_ok and ok
+            lines.append(f"[GameDVR] {msg}")
+
+        # 2) Fortnite-specific cleanup
+        is_fortnite = label_lower.startswith("fortnite")
+        if is_fortnite and settings.get("clean_shader", True):
+            ok, msg = self.clean_fortnite_shader_cache()
+            overall_ok = overall_ok and ok
+            lines.append(f"[Fortnite/Shader] {msg}")
+
+        if is_fortnite and settings.get("clean_logs", True):
+            ok, msg = self.clean_fortnite_logs_and_crashes()
+            overall_ok = overall_ok and ok
+            lines.append(f"[Fortnite/Logs] {msg}")
+
+        # 3) DirectX cache cleanup (global)
+        if settings.get("clean_dx", True):
+            ok, msg = self.clean_directx_cache()
+            overall_ok = overall_ok and ok
+            lines.append(f"[DirectX] {msg}")
+
+        # 4) CPU priority
+        priority = str(settings.get("cpu_priority", "HIGH"))
+        ok_prio, msg_prio = self.apply_game_priority(profile.game_label, priority)
+        overall_ok = overall_ok and ok_prio
+        lines.append(f"[CPU] {msg_prio}")
+
+        # 5) CPU affinity
+        affinity = str(settings.get("affinity", "recommended")).lower()
+        if affinity == "recommended":
+            ok_aff, msg_aff = self.apply_game_affinity_recommended(profile.game_label)
+            overall_ok = overall_ok and ok_aff
+            lines.append(f"[Affinity] {msg_aff}")
+        elif affinity == "all":
+            ok_aff, msg_aff = self.apply_game_affinity_all_cores(profile.game_label)
+            overall_ok = overall_ok and ok_aff
+            lines.append(f"[Affinity] {msg_aff}")
+        else:
+            # "custom" or unknown – not implemented yet
+            lines.append("[Affinity] Custom affinity not implemented yet; skipped.")
+
+        # (Future) per-game Nagle toggles could hook in here.
+
+        # Summary
+        header = "[Profile] Applied"
+        if has_file:
+            header += " (from saved profile file)."
+        else:
+            header += " (using built-in defaults)."
+        lines.insert(1, header)
+
+        return overall_ok, "\n".join(lines)
