@@ -13,10 +13,7 @@ global Windows optimizer. It currently includes:
 - DirectX shader cache cleanup
 - Process detection engine (Phase 4A)
 - Per-game CPU priority & CPU affinity helpers (Phase 4B)
-
-Everything here is designed to be **safe by default**:
-- Only touches known game directories or well-known cache locations
-- Fails gracefully on non-Windows systems
+- Generic per-game storage helpers (Phase 4C)
 """
 
 import os
@@ -74,6 +71,11 @@ class GameOptimizer:
             apply_game_priority(...)
             apply_game_affinity_recommended(...)
             apply_game_affinity_all_cores(...)
+            clean_game_temp(...)
+            clean_game_crashes(...)
+            clean_game_shaders(...)
+            reset_game_config(...)
+            disable_nagle_for_game(...)
     """
 
     # =========================================================
@@ -141,6 +143,7 @@ class GameOptimizer:
             logs      -> Saved/Logs
             crashes   -> Saved/Crashes
             shaders   -> Saved/ShaderCaches (approximate)
+            config    -> Saved/Config/WindowsClient
         """
         lad = os.environ.get("LOCALAPPDATA")
         if not lad:
@@ -151,6 +154,7 @@ class GameOptimizer:
                 "logs": dummy / "Logs",
                 "crashes": dummy / "Crashes",
                 "shaders": dummy / "ShaderCaches",
+                "config": dummy / "Config" / "WindowsClient",
             }
 
         base = Path(lad) / "FortniteGame" / "Saved"
@@ -159,6 +163,7 @@ class GameOptimizer:
             "logs": base / "Logs",
             "crashes": base / "Crashes",
             "shaders": base / "ShaderCaches",
+            "config": base / "Config" / "WindowsClient",
         }
 
     def _delete_dir_contents(self, p: Path) -> int:
@@ -298,14 +303,6 @@ class GameOptimizer:
     # =========================================================
     #   PROCESS DETECTION ENGINE (Phase 4A)
     # =========================================================
-    #
-    # This layer is used by:
-    #   - Per-game CPU priority tweaks
-    #   - Per-game Nagle / latency presets
-    #   - Any "while game is running" features
-    #
-    # It does NOT auto-scan or permanently monitor anything;
-    # it only looks for processes when explicitly called.
 
     def _game_to_process_names(self, game_label: str) -> list[str]:
         """
@@ -385,19 +382,6 @@ class GameOptimizer:
     ) -> Tuple[bool, str, ProcessInfo | None]:
         """
         Core entry for the rest of the optimizer.
-
-        Args:
-            game_label: Text shown in the Game combobox
-            timeout_sec: How long to wait for the game to appear
-                         0 = no waiting, just one scan
-            poll_interval: How often to recheck while waiting
-
-        Returns:
-            (ok, message, ProcessInfo or None)
-
-        Examples of 'ok':
-            True,  "Found FortniteClient-Win64-Shipping.exe (PID 1234)", ProcessInfo(...)
-            False, "No matching process found for Fortnite", None
         """
         ok, msg = self._is_psutil_ready()
         if not ok:
@@ -447,11 +431,6 @@ class GameOptimizer:
     ) -> Tuple[bool, str, ProcessInfo | None]:
         """
         High-level helper: wait up to timeout_sec for the game to appear.
-
-        Intended use:
-            ok, msg, proc = self.wait_for_game("Fortnite", timeout_sec=60)
-            if ok:
-                # bump priority, tweak network, etc.
         """
         return self.find_game_process(
             game_label=game_label,
@@ -463,8 +442,6 @@ class GameOptimizer:
         """
         Single-shot: return a PID for the selected game if it's running,
         or None if not.
-
-        No waiting, no retries.
         """
         ok, _, proc = self.find_game_process(
             game_label=game_label,
@@ -610,3 +587,149 @@ class GameOptimizer:
         if ok2:
             return True, f"{msg} (game='{game_label}', preset='all cores')"
         return False, msg
+
+    # =========================================================
+    #   GENERIC GAME STORAGE HELPERS (Phase 4C)
+    # =========================================================
+
+    def _game_root_path(self, game_label: str) -> Path | None:
+        """
+        Best-effort guess at a per-game 'root' folder for temp / config.
+
+        This is intentionally conservative and only touches user-space
+        locations under %LOCALAPPDATA% / %APPDATA%.
+        """
+        label = (game_label or "").strip().lower()
+        lad = os.environ.get("LOCALAPPDATA") or ""
+        rad = os.environ.get("APPDATA") or ""
+
+        if not lad and not rad:
+            return None
+
+        lad_p = Path(lad) if lad else None
+        rad_p = Path(rad) if rad else None
+
+        if label.startswith("fortnite"):
+            paths = self._fortnite_paths()
+            return paths["base"]
+
+        if label.startswith("minecraft"):
+            # Classic Java path
+            if rad_p is not None:
+                return rad_p / ".minecraft"
+            return None
+
+        # For now, other games are not guessed; we keep it safe.
+        return None
+
+    def clean_game_temp(self, game_label: str) -> Tuple[bool, str]:
+        """
+        Clean per-game temp-like folders where it is safe to do so.
+        Currently implemented for:
+          - Fortnite (Saved/Temp if present)
+          - Minecraft (.minecraft/temp, if present)
+        """
+        root = self._game_root_path(game_label)
+        if root is None:
+            return False, f"No known safe temp path for '{game_label}'."
+
+        candidates: List[Path] = []
+        label = (game_label or "").strip().lower()
+
+        if label.startswith("fortnite"):
+            paths = self._fortnite_paths()
+            candidates.append(paths["base"] / "Temp")
+        elif label.startswith("minecraft"):
+            candidates.append(root / "temp")
+
+        total = 0
+        for c in candidates:
+            total += self._delete_dir_contents(c)
+
+        if total == 0:
+            return False, f"No temp files removed for '{game_label}' (folders missing or empty)."
+        return True, f"Removed ~{total} temp entries for '{game_label}'."
+
+    def clean_game_crashes(self, game_label: str) -> Tuple[bool, str]:
+        """
+        Clean per-game crash dumps / logs where we know locations.
+        """
+        label = (game_label or "").strip().lower()
+
+        if label.startswith("fortnite"):
+            return self.clean_fortnite_logs_and_crashes()
+
+        # Minecraft, Valorant, CoD, etc. can be added later.
+        return False, f"Crash cleanup not implemented yet for '{game_label}'."
+
+    def clean_game_shaders(self, game_label: str) -> Tuple[bool, str]:
+        """
+        Clean per-game shader / pipeline caches where it is safe.
+        """
+        label = (game_label or "").strip().lower()
+
+        if label.startswith("fortnite"):
+            return self.clean_fortnite_shader_cache()
+
+        # For other engines we hold off until paths are fully mapped.
+        return False, f"Shader cache cleanup not implemented yet for '{game_label}'."
+
+    def reset_game_config(self, game_label: str) -> Tuple[bool, str]:
+        """
+        Reset per-game config by backing up and deleting known config files.
+
+        Currently implemented for:
+          - Fortnite: Saved/Config/WindowsClient/*.ini
+        """
+        label = (game_label or "").strip().lower()
+        if not label.startswith("fortnite"):
+            return False, f"Config reset not implemented yet for '{game_label}'."
+
+        paths = self._fortnite_paths()
+        cfg_dir = paths["config"]
+        if not cfg_dir.exists() or not cfg_dir.is_dir():
+            return False, f"Config directory not found for Fortnite: {cfg_dir}"
+
+        backup_dir = cfg_dir.parent / "WindowsClient.backup"
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            return False, f"Failed to create backup folder: {e!r}"
+
+        moved = 0
+        for child in cfg_dir.iterdir():
+            if not child.is_file():
+                continue
+            try:
+                target = backup_dir / child.name
+                if target.exists():
+                    target.unlink()
+                child.rename(target)
+                moved += 1
+            except Exception:
+                continue
+
+        if moved == 0:
+            return False, f"No config files moved for Fortnite (folder may already be empty): {cfg_dir}"
+        return True, f"Backed up and cleared {moved} config files from {cfg_dir}."
+
+    # =========================================================
+    #   NAGLE / LATENCY PRESET (Phase 4D)
+    # =========================================================
+
+    def disable_nagle_for_game(self, game_label: str) -> Tuple[bool, str]:
+        """
+        For now, this is a thin wrapper that simply logs intent.
+
+        A full per-game Nagle implementation would require mapping
+        game sockets to specific interfaces / ports, which is outside
+        the current scope. Instead we:
+          - Rely on the global Windows optimizer for registry-based Nagle
+          - Log that this preset was requested for visibility
+        """
+        label = (game_label or "").strip() or "<unknown>"
+        # This is intentionally a no-op in terms of system changes.
+        return True, (
+            f"Nagle low-latency preset requested for '{label}'. "
+            "Apply global Nagle toggles from the Windows optimizer page for full effect."
+        )

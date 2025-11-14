@@ -1,22 +1,30 @@
 # app/pages/windows_page.py
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTextEdit, QLabel, QScrollArea, QFileDialog
+    QTextEdit, QLabel, QScrollArea, QFileDialog, QCheckBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
+
 from app.ui.widgets.card import Card
 from app.ui.widgets.toggle import Toggle
 from app.ui.widgets.glow_indicator import GlowIndicator
 from app.ui.widgets.divider import Divider
 from app.ui.animations import fade_in, slide_in_y
+
 from src.qrs.modules.windows_optim import WindowsOptimizer
+from src.qrs.service.controller import ServiceController
+from src.qrs.service.autostart import AutostartManager
 
 
 class WindowsPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background: transparent;")
+
+        # Core backend objects
         self.opt = WindowsOptimizer()
+        self.service = ServiceController()
+        self.autostart = AutostartManager()
 
         # ----------------------------------------
         # Scroll wrapper
@@ -147,7 +155,6 @@ class WindowsPage(QWidget):
         # ----------------------------------------
         # STORAGE ANALYZER
         # ----------------------------------------
-
         storage = Card("Storage Analyzer")
         st = storage.body()
 
@@ -166,8 +173,6 @@ class WindowsPage(QWidget):
         # ----------------------------------------
         # PROFILE MANAGER
         # ----------------------------------------
-    
-
         prof = Card("Profile Manager")
         pf = prof.body()
 
@@ -277,6 +282,40 @@ class WindowsPage(QWidget):
 
         root.addWidget(backup_card)
 
+        # ----- Background Service (Phase 11) -----
+        svc_card = Card("Background Service")
+        svcv = svc_card.body()
+
+        row_status = QHBoxLayout()
+        self.lbl_svc_status = QLabel("Service status: unknown")
+        self.lbl_svc_status.setStyleSheet("color:#DDE1EA;")
+        self.ind_svc = GlowIndicator()
+        self.ind_svc.setFixedSize(14, 14)
+
+        row_status.addWidget(self.lbl_svc_status)
+        row_status.addStretch()
+        row_status.addWidget(self.ind_svc)
+
+        row_buttons = QHBoxLayout()
+        self.btn_svc_start = QPushButton("Start Service")
+        self.btn_svc_stop = QPushButton("Stop Service")
+        self.btn_svc_restart = QPushButton("Restart")
+
+        row_buttons.addWidget(self.btn_svc_start)
+        row_buttons.addWidget(self.btn_svc_stop)
+        row_buttons.addWidget(self.btn_svc_restart)
+        row_buttons.addStretch()
+
+        self.chk_svc_autostart = QCheckBox("Start service automatically with Windows")
+        self.chk_svc_autostart.setStyleSheet("color:#DDE1EA;")
+
+        svcv.addLayout(row_status)
+        svcv.addLayout(row_buttons)
+        svcv.addWidget(self.chk_svc_autostart)
+
+        root.addWidget(svc_card)
+
+        # Final stretch so content hugs the top
         root.addStretch()
 
         # attach scroll to main layout
@@ -284,8 +323,14 @@ class WindowsPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(scroll)
 
+        # Timer for periodic status refresh
+        self._svc_timer = QTimer(self)
+        self._svc_timer.setInterval(5000)  # 5 seconds
+        self._svc_timer.timeout.connect(self._svc_refresh_status)
+
         # wire everything
         self._connect()
+        self._init_service_status()
 
     # ----------------------------------------
     # SIGNAL CONNECTIONS
@@ -359,6 +404,66 @@ class WindowsPage(QWidget):
         self.btn_backup_create.clicked.connect(self._backup_create)
         self.btn_backup_restore.clicked.connect(self._backup_restore)
         self.btn_backup_open.clicked.connect(self._backup_open)
+
+        # background service
+        self.btn_svc_start.clicked.connect(self._svc_start)
+        self.btn_svc_stop.clicked.connect(self._svc_stop)
+        self.btn_svc_restart.clicked.connect(self._svc_restart)
+        self.chk_svc_autostart.toggled.connect(self._svc_autostart_changed)
+
+    # ----------------------------------------
+    # SERVICE STATUS INIT / REFRESH
+    # ----------------------------------------
+    def _init_service_status(self):
+        # Autostart checkbox initial state
+        enabled = self.autostart.is_enabled()
+        self.chk_svc_autostart.blockSignals(True)
+        self.chk_svc_autostart.setChecked(enabled)
+        self.chk_svc_autostart.blockSignals(False)
+
+        # Initial status + start timer
+        self._svc_refresh_status()
+        self._svc_timer.start()
+
+    def _svc_refresh_status(self):
+        running, detail = self.service.is_daemon_running()
+        if running:
+            self.lbl_svc_status.setText("Service status: Running")
+            self.ind_svc.show()
+        else:
+            self.lbl_svc_status.setText("Service status: Stopped")
+            self.ind_svc.hide()
+        # Also echo to log in a low-key way
+        self.log.append(f"[Service] Status check: {detail}")
+
+    # ----------------------------------------
+    # SERVICE ACTIONS
+    # ----------------------------------------
+    def _svc_start(self):
+        ok, msg = self.service.start_daemon()
+        prefix = "[Service] Started: " if ok else "[Service] Start failed: "
+        self.log.append(prefix + msg)
+        self._svc_refresh_status()
+
+    def _svc_stop(self):
+        ok, msg = self.service.stop_daemon()
+        prefix = "[Service] Stopped: " if ok else "[Service] Stop failed: "
+        self.log.append(prefix + msg)
+        self._svc_refresh_status()
+
+    def _svc_restart(self):
+        ok, msg = self.service.restart_daemon()
+        prefix = "[Service] Restarted: " if ok else "[Service] Restart failed: "
+        self.log.append(prefix + msg)
+        self._svc_refresh_status()
+
+    def _svc_autostart_changed(self, checked: bool):
+        ok, msg = self.autostart.set_enabled(checked)
+        prefix = "[Service] Autostart "
+        prefix += "enabled: " if checked else "disabled: "
+        if not ok:
+            prefix = "[Service] Autostart change failed: "
+        self.log.append(prefix + msg)
 
     # ----------------------------------------
     # EXISTING LOGIC

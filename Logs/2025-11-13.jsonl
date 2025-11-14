@@ -1,0 +1,12 @@
+{"ts": 1763078617.2306361, "ts_iso": "2025-11-13T18:03:37", "source": "UI", "level": "info", "message": "Suite window initialized."}
+{"ts": 1763078621.3318155, "ts_iso": "2025-11-13T18:03:41", "source": "UI", "level": "info", "message": "Switched to Windows Optimizer"}
+{"ts": 1763078621.8877463, "ts_iso": "2025-11-13T18:03:41", "source": "UI", "level": "info", "message": "Switched to Timeline"}
+{"ts": 1763078626.1783228, "ts_iso": "2025-11-13T18:03:46", "source": "UI", "level": "info", "message": "Switched to Password Manager"}
+{"ts": 1763078626.563497, "ts_iso": "2025-11-13T18:03:46", "source": "UI", "level": "info", "message": "Switched to Timeline"}
+{"ts": 1763079009.319022, "source": "Dashboard", "level": "info", "message": "Quick Scan (Windows) run from Dashboard.", "meta": {}}
+{"ts": 1763079011.0400698, "source": "Dashboard", "level": "ok", "message": "[Windows] Deep Cleanup removed ~18 items.", "meta": {}}
+{"ts": 1763079011.774886, "source": "Dashboard", "level": "info", "message": "Quick Scan (Windows) run from Dashboard.", "meta": {}}
+{"ts": 1763079526.5132828, "source": "Dashboard", "level": "info", "message": "Quick Scan invoked from Dashboard.", "extra": {}}
+{"ts": 1763079527.7302794, "source": "Dashboard", "level": "ok", "message": "Deep Cleanup removed ~16 items (from Dashboard).", "extra": {}}
+{"ts": 1763079528.6192787, "source": "Dashboard", "level": "info", "message": "Quick Scan invoked from Dashboard.", "extra": {}}
+{"ts": 1763079538.461321, "source": "Dashboard", "level": "info", "message": "Quick Scan invoked from Dashboard.", "extra": {}}
