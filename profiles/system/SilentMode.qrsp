@@ -1,0 +1,10 @@
+{
+  "type": "system_profile",
+  "name": "Silent Mode",
+  "description": "Quiet operation, reduced CPU spikes.",
+  "power_plan": "balanced",
+  "network": {
+    "autotuning": "normal",
+    "ctcp": false
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "type": "game_profile",
+  "game": "Overwatch 2",
+  "description": "Frametime stability preset for Overwatch 2.",
+  "actions": {
+    "priority": "HIGH",
+    "affinity": "all_cores",
+    "clean_directx_cache": true,
+    "ctcp": true
+  }
+}

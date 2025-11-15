@@ -1,0 +1,13 @@
+{
+  "type": "system_profile",
+  "name": "Productivity",
+  "description": "Balanced desktop usage.",
+  "power_plan": "balanced",
+  "network": {
+    "dns_primary": "8.8.8.8",
+    "dns_secondary": "8.8.4.4",
+    "ctcp": false,
+    "autotuning": "normal",
+    "nagle": true
+  }
+}

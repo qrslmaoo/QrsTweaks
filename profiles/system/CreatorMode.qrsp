@@ -1,0 +1,6 @@
+{
+  "type": "system_profile",
+  "name": "Creator Mode",
+  "description": "Rendering, editing, live preview stability.",
+  "power_plan": "high_performance"
+}

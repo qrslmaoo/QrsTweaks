@@ -1,0 +1,34 @@
+{
+  "type": "game_profile",
+  "game": "Cyberpunk 2077",
+  "description": "Advanced preset for smoothing streaming, reducing shader stalls, and stabilizing CPU/GPU scheduling.",
+  "actions": {
+    "disable_game_bar": true,
+    "disable_game_dvr": true,
+
+    "clean_directx_cache": true,
+    "clean_shader_cache": true,
+    "clean_logs": true,
+
+    "priority": "HIGH",
+    "affinity": "recommended",
+
+    "disable_sys_overlays": true,
+    "disable_widgets": true,
+    "disable_chat_icon": true,
+
+    "network_optimize": "gaming",
+    "autotuning": "restricted",
+    "ctcp": true,
+    "nagle": false,
+
+    "prelaunch_cleanup": [
+      "directx",
+      "shadercaches",
+      "temp",
+      "cyberpunk_local"
+    ],
+
+    "custom_notes": "This profile pre-cleans shader and streaming cache files to reduce traversal stalls in Night City. Recommended for high refresh rate gameplay."
+  }
+}

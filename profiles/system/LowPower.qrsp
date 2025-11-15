@@ -1,0 +1,10 @@
+{
+  "type": "system_profile",
+  "name": "Low Power Mode",
+  "description": "Power saving with safe desktop performance.",
+  "power_plan": "power_saver",
+  "network": {
+    "autotuning": "normal",
+    "ctcp": false
+  }
+}

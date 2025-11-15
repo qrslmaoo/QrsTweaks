@@ -1,0 +1,14 @@
+{
+  "type": "game_profile",
+  "game": "Valorant",
+  "description": "Advanced esports preset for the lowest latency and stable frame pacing.",
+  "actions": {
+    "clean_directx_cache": true,
+    "priority": "HIGH",
+    "affinity": "all_cores",
+    "ctcp": true,
+    "autotuning": "disabled",
+    "nagle": false,
+    "disable_sys_overlays": true
+  }
+}

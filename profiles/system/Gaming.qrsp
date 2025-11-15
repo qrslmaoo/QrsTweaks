@@ -1,0 +1,18 @@
+{
+  "type": "system_profile",
+  "name": "Gaming",
+  "description": "High performance gaming profile.",
+  "power_plan": "high_performance",
+  "network": {
+    "dns_primary": "1.1.1.1",
+    "dns_secondary": "1.0.0.1",
+    "ctcp": true,
+    "autotuning": "restricted",
+    "nagle": false
+  },
+  "ui": {
+    "show_file_extensions": true,
+    "hide_widgets": true,
+    "open_this_pc": true
+  }
+}

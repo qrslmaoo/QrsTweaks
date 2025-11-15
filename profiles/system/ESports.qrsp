@@ -1,0 +1,16 @@
+{
+  "type": "system_profile",
+  "name": "Esports Mode",
+  "description": "Minimum latency, aggressive network optimization.",
+  "power_plan": "high_performance",
+  "network": {
+    "dns_primary": "1.1.1.1",
+    "dns_secondary": "1.0.0.1",
+    "ctcp": true,
+    "autotuning": "disabled",
+    "nagle": false
+  },
+  "ui": {
+    "hide_widgets": true
+  }
+}

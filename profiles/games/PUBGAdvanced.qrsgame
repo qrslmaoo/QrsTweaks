@@ -1,0 +1,13 @@
+{
+  "type": "game_profile",
+  "game": "PUBG",
+  "description": "PUBG performance optimization, stutter reduction.",
+  "actions": {
+    "priority": "HIGH",
+    "affinity": "recommended",
+    "clean_directx_cache": true,
+    "clean_logs": true,
+    "ctcp": true,
+    "autotuning": "restricted"
+  }
+}

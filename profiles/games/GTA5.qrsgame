@@ -1,0 +1,9 @@
+{
+  "type": "game_profile",
+  "game": "GTA 5",
+  "description": "Reduce CPU spikes and improve loading consistency.",
+  "actions": {
+    "priority": "ABOVE_NORMAL",
+    "clean_directx_cache": true
+  }
+}

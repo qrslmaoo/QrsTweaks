@@ -1,0 +1,14 @@
+{
+  "type": "game_profile",
+  "game": "Apex Legends",
+  "description": "Smooth streaming + reduced shader spikes for Apex.",
+  "actions": {
+    "priority": "HIGH",
+    "affinity": "recommended",
+    "clean_directx_cache": true,
+    "clean_logs": true,
+    "ctcp": true,
+    "autotuning": "restricted",
+    "nagle": false
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "game_profile",
+  "game": "Rainbow Six Siege",
+  "description": "High FPS and low frametime jitter for Siege.",
+  "actions": {
+    "priority": "HIGH",
+    "affinity": "recommended",
+    "clean_directx_cache": true,
+    "ctcp": true,
+    "autotuning": "restricted",
+    "nagle": false
+  }
+}

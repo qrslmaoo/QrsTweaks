@@ -1,0 +1,9 @@
+{
+  "type": "system_profile",
+  "name": "School / Work",
+  "description": "Stable and minimal distractions.",
+  "ui": {
+    "hide_widgets": false,
+    "open_this_pc": true
+  }
+}

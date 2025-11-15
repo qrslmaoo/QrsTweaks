@@ -1,0 +1,10 @@
+{
+  "type": "game_profile",
+  "game": "Call of Duty",
+  "description": "DMZ / MW / WZ performance mode.",
+  "actions": {
+    "priority": "HIGH",
+    "affinity": "all_cores",
+    "clean_directx_cache": true
+  }
+}

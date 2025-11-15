@@ -1,0 +1,11 @@
+{
+  "type": "game_profile",
+  "game": "GTA 5",
+  "description": "Advanced GTA V tuning: fix slow streaming and CPU hitches.",
+  "actions": {
+    "priority": "ABOVE_NORMAL",
+    "clean_directx_cache": true,
+    "affinity": "recommended",
+    "ctcp": true
+  }
+}

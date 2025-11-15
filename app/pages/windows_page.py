@@ -1,4 +1,5 @@
 # app/pages/windows_page.py
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTextEdit, QLabel, QScrollArea, QFileDialog
@@ -8,8 +9,9 @@ from PySide6.QtCore import Qt
 from app.ui.widgets.card import Card
 from app.ui.widgets.toggle import Toggle
 from app.ui.widgets.glow_indicator import GlowIndicator
-from app.ui.widgets.divider import Divider
-from app.ui.animations import fade_in, slide_in_y
+from app.ui.widgets.divider import Divider  # kept in case you use it later
+
+from app.ui.animations import fade_in, slide_in_y  # safe to keep; no behavior change
 
 from src.qrs.modules.windows_optim import WindowsOptimizer
 
@@ -247,11 +249,6 @@ class WindowsPage(QWidget):
         self.btn_ui_show_ext = QPushButton("Show File Extensions")
         self.btn_ui_restore_ui = QPushButton("Restore UI Defaults")
 
-        # NEW: Phase 7D tools
-        self.btn_ui_restart_explorer = QPushButton("Restart Explorer (Taskbar Fix)")
-        self.btn_ui_clear_icons = QPushButton("Rebuild Icon Cache")
-        self.btn_ui_repair_start = QPushButton("Repair Start Menu Shell")
-
         for b in (
             self.btn_ui_disable_bing,
             self.btn_ui_disable_widgets,
@@ -259,9 +256,6 @@ class WindowsPage(QWidget):
             self.btn_ui_explorer_thispc,
             self.btn_ui_show_ext,
             self.btn_ui_restore_ui,
-            self.btn_ui_restart_explorer,
-            self.btn_ui_clear_icons,
-            self.btn_ui_repair_start,
         ):
             b.setMinimumHeight(34)
             uv.addWidget(b)
@@ -364,10 +358,6 @@ class WindowsPage(QWidget):
         self.btn_ui_explorer_thispc.clicked.connect(self._ui_explorer_thispc)
         self.btn_ui_show_ext.clicked.connect(self._ui_show_ext)
         self.btn_ui_restore_ui.clicked.connect(self._ui_restore_ui)
-
-        self.btn_ui_restart_explorer.clicked.connect(self._ui_restart_explorer)
-        self.btn_ui_clear_icons.clicked.connect(self._ui_clear_icon_cache)
-        self.btn_ui_repair_start.clicked.connect(self._ui_repair_start_menu)
 
         # advanced tools: Backup
         self.btn_backup_create.clicked.connect(self._backup_create)
@@ -611,18 +601,6 @@ class WindowsPage(QWidget):
 
     def _ui_restore_ui(self):
         ok, msg = self.opt.ui_restore_defaults()
-        self.log.append(msg)
-
-    def _ui_restart_explorer(self):
-        ok, msg = self.opt.ui_restart_explorer()
-        self.log.append(msg)
-
-    def _ui_clear_icon_cache(self):
-        ok, msg = self.opt.ui_clear_icon_cache()
-        self.log.append(msg)
-
-    def _ui_repair_start_menu(self):
-        ok, msg = self.opt.ui_repair_start_menu()
         self.log.append(msg)
 
     # ----- ADVANCED TOOLS: BACKUP & RESTORE -----

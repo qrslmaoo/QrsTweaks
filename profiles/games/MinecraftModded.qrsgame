@@ -1,0 +1,11 @@
+{
+  "type": "game_profile",
+  "game": "Minecraft",
+  "description": "Optimized for modded Minecraft (Forge/Fabric).",
+  "actions": {
+    "priority": "NORMAL",
+    "affinity": "all_cores",
+    "clean_directx_cache": true,
+    "ctcp": false
+  }
+}

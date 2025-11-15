@@ -1,0 +1,6 @@
+{
+  "type": "system_profile",
+  "name": "Ultimate Performance",
+  "description": "Absolute maximum performance.",
+  "power_plan": "ultimate"
+}

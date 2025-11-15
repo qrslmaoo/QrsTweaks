@@ -1,0 +1,10 @@
+{
+  "type": "game_profile",
+  "game": "Valorant",
+  "description": "Lowest input latency possible.",
+  "actions": {
+    "priority": "HIGH",
+    "affinity": "all_cores",
+    "clean_directx_cache": true
+  }
+}

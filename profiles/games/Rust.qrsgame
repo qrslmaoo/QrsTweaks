@@ -1,0 +1,12 @@
+{
+  "type": "game_profile",
+  "game": "Rust",
+  "description": "Optimized for huge servers, monuments, and large bases.",
+  "actions": {
+    "priority": "HIGH",
+    "affinity": "recommended",
+    "clean_directx_cache": true,
+    "ctcp": true,
+    "autotuning": "restricted"
+  }
+}

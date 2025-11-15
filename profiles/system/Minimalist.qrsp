@@ -1,0 +1,9 @@
+{
+  "type": "system_profile",
+  "name": "Minimalist",
+  "description": "Clean UI, low overhead, no distractions.",
+  "ui": {
+    "hide_widgets": true,
+    "show_file_extensions": true
+  }
+}

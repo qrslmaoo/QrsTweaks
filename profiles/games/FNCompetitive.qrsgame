@@ -1,0 +1,14 @@
+{
+  "type": "game_profile",
+  "game": "Fortnite",
+  "description": "Max FPS competitive Fortnite profile.",
+  "actions": {
+    "disable_game_bar": true,
+    "disable_game_dvr": true,
+    "clean_shader_cache": true,
+    "clean_logs": true,
+    "clean_directx_cache": true,
+    "priority": "HIGH",
+    "affinity": "recommended"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "system_profile",
+  "name": "Developer",
+  "description": "Optimized for coding, VMs, and compilers.",
+  "power_plan": "high_performance",
+  "network": {
+    "ctcp": false,
+    "autotuning": "normal"
+  },
+  "ui": {
+    "show_file_extensions": true
+  }
+}

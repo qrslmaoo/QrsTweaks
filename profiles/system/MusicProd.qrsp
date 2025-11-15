@@ -1,0 +1,11 @@
+{
+  "type": "system_profile",
+  "name": "Music Production",
+  "description": "Low DPC latency for DAWs.",
+  "power_plan": "high_performance",
+  "network": {
+    "autotuning": "disabled",
+    "ctcp": false,
+    "nagle": false
+  }
+}

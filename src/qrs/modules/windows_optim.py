@@ -1,3 +1,5 @@
+# src/qrs/modules/windows_optim.py
+
 import os
 import json
 import shutil
@@ -31,7 +33,7 @@ class WindowsOptimizer:
       - Safe debloat operations
       - UI/taskbar tweaks
       - Backup/restore snapshots
-      - Shell/Start menu repair helpers (Phase 7)
+      - Windows Fix Tools (Phase 6)
     """
 
     def __init__(self):
@@ -321,7 +323,7 @@ class WindowsOptimizer:
         base = Path("C:\\")
         exclude = [Path("C:\\Windows"), Path("C:\\Program Files"), Path("C:\\Program Files (x86)")]
         dir_totals: Dict[Path, int] = {}
-        _, files = self._walk_sizes(base, exclude)
+        total, files = self._walk_sizes(base, exclude)
         for fp, size in files:
             parent = fp.parent
             dir_totals[parent] = dir_totals.get(parent, 0) + size
@@ -710,94 +712,6 @@ class WindowsOptimizer:
         return all_ok, msg
 
     # -------------------------------------------------
-    # SHELL / TASKBAR FIXES (Phase 7A)
-    # -------------------------------------------------
-    def clear_icon_cache(self) -> Tuple[bool, str]:
-        """
-        Delete common icon cache databases for the current user.
-        A sign-out or Explorer restart is usually required to fully rebuild.
-        """
-        if platform.system().lower() != "windows":
-            return False, "[Shell] Icon cache tweaks are Windows-only."
-
-        lad = os.getenv("LOCALAPPDATA")
-        if not lad:
-            return False, "[Shell] LOCALAPPDATA not set; cannot locate icon cache."
-
-        base = Path(lad)
-        targets: List[Path] = []
-
-        # Classic IconCache.db variants
-        targets.append(base / "IconCache.db")
-        for name in ("IconCache_16.db", "IconCache_32.db", "IconCache_48.db", "IconCache_96.db"):
-            targets.append(base / name)
-
-        # Explorer icon cache files
-        explorer_cache_dir = base / "Microsoft" / "Windows" / "Explorer"
-        if explorer_cache_dir.exists():
-            for p in explorer_cache_dir.glob("iconcache_*.db"):
-                targets.append(p)
-
-        removed = 0
-        for p in targets:
-            try:
-                if p.exists():
-                    p.unlink()
-                    removed += 1
-            except OSError:
-                # best effort: permission issues etc.
-                continue
-
-        if removed == 0:
-            return False, "[Shell] No icon cache files removed (they may already be rebuilt)."
-
-        return True, f"[Shell] Removed ~{removed} icon cache database files. Sign out or restart Explorer to rebuild."
-
-    def repair_explorer_shell(self) -> Tuple[bool, str]:
-        """
-        Restart Explorer cleanly, used when taskbar / Start button are stuck.
-        """
-        if platform.system().lower() != "windows":
-            return False, "[Shell] Explorer restart is Windows-only."
-
-        logs: List[str] = []
-
-        ok1, out1 = self._run_cmd("taskkill /F /IM explorer.exe")
-        logs.append(f"taskkill explorer.exe: {out1}")
-
-        # Give Explorer a moment to die before restart
-        ok2, out2 = self._run_cmd('cmd /c start "" explorer.exe')
-        logs.append(f"start explorer.exe: {out2}")
-
-        all_ok = ok1 and ok2
-        msg = "[Shell] Restarted Explorer. Taskbar / desktop should refresh.\n" + "\n".join(logs)
-        return all_ok, msg
-
-    def repair_start_menu(self) -> Tuple[bool, str]:
-        """
-        Best-effort Start menu shell repair by re-registering StartMenuExperienceHost.
-        This is intentionally scoped, not a full 'reinstall all apps' nuke.
-        """
-        if platform.system().lower() != "windows":
-            return False, "[Shell] Start menu repair is Windows-only."
-
-        cmd = (
-            "powershell.exe -Command "
-            "\"$pkg = Get-AppxPackage -Name 'Microsoft.Windows.StartMenuExperienceHost' -AllUsers; "
-            "if ($pkg) { "
-            "Add-AppxPackage -DisableDevelopmentMode -Register "
-            "($pkg.InstallLocation + '\\AppXManifest.xml') "
-            "} else { "
-            "Write-Output 'StartMenuExperienceHost package not found.' "
-            "}\""
-        )
-        ok, out = self._run_cmd(cmd)
-        prefix = "[Shell] Start menu repair requested."
-        if ok:
-            return True, f"{prefix}\n{out}"
-        return False, f"{prefix} Command failed:\n{out}"
-
-    # -------------------------------------------------
     # UI / TASKBAR TWEAKS
     # -------------------------------------------------
     def ui_disable_bing_search(self) -> Tuple[bool, str]:
@@ -877,25 +791,6 @@ class WindowsOptimizer:
         msg = "[UI] UI / taskbar settings restored towards defaults (may require Explorer restart).\n" + "\n".join(logs)
         return all_ok, msg
 
-    # New UI wrappers for shell fixes (Phase 7D)
-    def ui_restart_explorer(self) -> Tuple[bool, str]:
-        """
-        UI-facing helper to restart Explorer (used by WindowsPage button).
-        """
-        return self.repair_explorer_shell()
-
-    def ui_clear_icon_cache(self) -> Tuple[bool, str]:
-        """
-        UI-facing helper to clear icon cache.
-        """
-        return self.clear_icon_cache()
-
-    def ui_repair_start_menu(self) -> Tuple[bool, str]:
-        """
-        UI-facing helper to repair Start menu shell.
-        """
-        return self.repair_start_menu()
-
     # -------------------------------------------------
     # BACKUP & RESTORE SNAPSHOTS
     # -------------------------------------------------
@@ -939,9 +834,197 @@ class WindowsOptimizer:
         try:
             self.backups_dir.mkdir(parents=True, exist_ok=True)
             if platform.system().lower().startswith("win"):
-                os.startfile(str(self.backups_dir))  # type: ignore[attr-defined]
+                os.startfile(str(self.backups_dir))
                 return True, "[Backup] Opened backup folder in Explorer."
             else:
                 return False, "[Backup] Opening folder is only supported on Windows."
         except Exception as e:
             return False, f"[Backup] Failed to open backups folder: {e}"
+
+    # -------------------------------------------------
+    # WINDOWS FIX TOOLS (Phase 6)
+    # -------------------------------------------------
+    def _safe_delete_paths(self, paths: List[Path]) -> int:
+        """
+        Internal helper: best-effort delete files/dirs for given paths or simple globs.
+        """
+        removed = 0
+        for p in paths:
+            try:
+                s = str(p)
+                if "*" in s or "?" in s:
+                    # Treat as glob pattern
+                    parent = p.parent if p.parent != Path("") else Path(".")
+                    for fp in parent.glob(p.name):
+                        try:
+                            if fp.is_file():
+                                fp.unlink()
+                                removed += 1
+                            elif fp.is_dir():
+                                shutil.rmtree(fp, ignore_errors=True)
+                                removed += 1
+                        except OSError:
+                            continue
+                else:
+                    if p.is_file():
+                        p.unlink()
+                        removed += 1
+                    elif p.is_dir():
+                        for root, dirs, files in os.walk(p):
+                            for f in files:
+                                fp = Path(root) / f
+                                try:
+                                    fp.unlink()
+                                    removed += 1
+                                except OSError:
+                                    continue
+            except Exception:
+                continue
+        return removed
+
+    def repair_taskbar_shell(self) -> Tuple[bool, str]:
+        """
+        Re-register ShellExperienceHost and restart Explorer.
+        Helps when taskbar / start menu feels broken.
+        """
+        logs: List[str] = []
+
+        ps = (
+            'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
+            '"Get-AppxPackage -AllUsers Microsoft.Windows.ShellExperienceHost '
+            '| ForEach-Object { Add-AppxPackage -DisableDevelopmentMode '
+            '-Register ($_.InstallLocation + \'\\AppXManifest.xml\') }"'
+        )
+        ok1, out1 = self._run_cmd(ps)
+        logs.append(f"Re-register ShellExperienceHost: {out1}")
+
+        # Soft Explorer restart
+        ok2, out2 = self._run_cmd("taskkill /F /IM explorer.exe")
+        logs.append(f"Kill explorer.exe: {out2}")
+        ok3, out3 = self._run_cmd("start explorer.exe")
+        logs.append(f"Restart explorer.exe: {out3}")
+
+        all_ok = ok1 and ok2 and ok3
+        msg = "[FixTools] Taskbar / Shell repair attempted.\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def repair_uwp_apps_core(self) -> Tuple[bool, str]:
+        """
+        Light UWP repair: re-register core system app manifests only.
+        """
+        logs: List[str] = []
+        all_ok = True
+
+        core_packages = [
+            "Microsoft.Windows.StartMenuExperienceHost",
+            "Microsoft.Windows.ShellExperienceHost",
+            "Microsoft.Windows.Search",
+        ]
+
+        for pkg in core_packages:
+            ps = (
+                'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
+                f'"$pkg = Get-AppxPackage -AllUsers {pkg}; '
+                'if ($pkg) { Add-AppxPackage -DisableDevelopmentMode '
+                '-Register ($pkg.InstallLocation + \'\\AppXManifest.xml\') }"'
+            )
+            ok, out = self._run_cmd(ps)
+            logs.append(f"Re-register {pkg}: {out}")
+            all_ok = all_ok and ok
+
+        msg = "[FixTools] Core UWP app repair completed (best-effort).\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def reset_search_index(self) -> Tuple[bool, str]:
+        """
+        Restart Windows Search service and request index rebuild.
+        """
+        logs: List[str] = []
+        all_ok = True
+
+        cmds = [
+            "net stop WSearch",
+            r'reg add "HKLM\SOFTWARE\Microsoft\Windows Search" /v SetupCompletedSuccessfully /t REG_DWORD /d 0 /f',
+            "net start WSearch",
+        ]
+        for c in cmds:
+            ok, out = self._run_cmd(c)
+            logs.append(f"{c}: {out}")
+            all_ok = all_ok and ok
+
+        msg = "[FixTools] Search index reset requested (rebuild will run in background).\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def reset_icon_cache(self) -> Tuple[bool, str]:
+        """
+        Clear common icon cache databases for the current user.
+        """
+        lad = os.getenv("LOCALAPPDATA")
+        if not lad:
+            return False, "[FixTools] LOCALAPPDATA not found; cannot clear icon cache."
+
+        base = Path(lad)
+        patterns = [
+            base / "IconCache.db",
+            base / "IconCache*.db",
+            base / "Microsoft" / "Windows" / "Explorer" / "iconcache*",
+        ]
+        removed = self._safe_delete_paths(patterns)
+        msg = f"[FixTools] Cleared ~{removed} icon cache entries. You may need to sign out/in."
+        return removed > 0, msg
+
+    def reset_thumbnail_cache(self) -> Tuple[bool, str]:
+        """
+        Clear thumbnail cache databases for the current user.
+        """
+        lad = os.getenv("LOCALAPPDATA")
+        if not lad:
+            return False, "[FixTools] LOCALAPPDATA not found; cannot clear thumbnail cache."
+
+        base = Path(lad) / "Microsoft" / "Windows" / "Explorer"
+        patterns = [
+            base / "thumbcache_*.db",
+        ]
+        removed = self._safe_delete_paths(patterns)
+        msg = f"[FixTools] Cleared ~{removed} thumbnail cache files."
+        return removed > 0, msg
+
+    def explorer_soft_reset(self) -> Tuple[bool, str]:
+        """
+        Soft Explorer reset only (no app re-registration).
+        """
+        logs: List[str] = []
+        ok1, out1 = self._run_cmd("taskkill /F /IM explorer.exe")
+        logs.append(f"Kill explorer.exe: {out1}")
+        ok2, out2 = self._run_cmd("start explorer.exe")
+        logs.append(f"Start explorer.exe: {out2}")
+
+        all_ok = ok1 and ok2
+        msg = "[FixTools] Explorer soft reset performed.\n" + "\n".join(logs)
+        return all_ok, msg
+
+    def fix_start_menu_taskbar_bundle(self) -> Tuple[bool, str]:
+        """
+        Bundle: search reset + icon cache + thumbnail cache + explorer soft reset.
+        """
+        logs: List[str] = []
+        all_ok = True
+
+        ok1, msg1 = self.reset_search_index()
+        logs.append(msg1)
+        all_ok = all_ok and ok1
+
+        ok2, msg2 = self.reset_icon_cache()
+        logs.append(msg2)
+        all_ok = all_ok and ok2
+
+        ok3, msg3 = self.reset_thumbnail_cache()
+        logs.append(msg3)
+        all_ok = all_ok and ok3
+
+        ok4, msg4 = self.explorer_soft_reset()
+        logs.append(msg4)
+        all_ok = all_ok and ok4
+
+        msg = "[FixTools] Start menu / taskbar repair bundle executed.\n" + "\n\n".join(logs)
+        return all_ok, msg

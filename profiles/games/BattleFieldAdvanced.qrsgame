@@ -1,0 +1,12 @@
+{
+  "type": "game_profile",
+  "game": "Battlefield",
+  "description": "Optimized for massive player count + explosions + physics.",
+  "actions": {
+    "priority": "HIGH",
+    "affinity": "all_cores",
+    "clean_directx_cache": true,
+    "ctcp": true,
+    "autotuning": "restricted"
+  }
+}

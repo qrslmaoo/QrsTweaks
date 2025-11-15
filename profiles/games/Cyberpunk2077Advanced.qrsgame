@@ -1,0 +1,19 @@
+{
+  "type": "game_profile",
+  "game": "Cyberpunk 2077",
+  "description": "Advanced preset for reducing traversal stutters and CPU spikes.",
+  "actions": {
+    "disable_game_bar": true,
+    "disable_game_dvr": true,
+    "clean_directx_cache": true,
+    "clean_shader_cache": true,
+    "clean_logs": true,
+    "priority": "HIGH",
+    "affinity": "recommended",
+    "ctcp": true,
+    "autotuning": "restricted",
+    "nagle": false,
+    "disable_sys_overlays": true,
+    "prelaunch_cleanup": ["directx", "shadercaches", "temp"]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "type": "game_profile",
+  "game": "Fortnite",
+  "description": "Low-end systems: reduce hitching & shader stutters.",
+  "actions": {
+    "clean_shader_cache": true,
+    "clean_logs": true,
+    "priority": "ABOVE_NORMAL",
+    "affinity": "recommended"
+  }
+}

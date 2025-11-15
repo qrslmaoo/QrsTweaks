@@ -1,0 +1,13 @@
+{
+  "type": "system_profile",
+  "name": "Streaming",
+  "description": "Max throughput and stability for OBS / encoding.",
+  "power_plan": "high_performance",
+  "network": {
+    "dns_primary": "1.1.1.1",
+    "dns_secondary": "1.0.0.1",
+    "ctcp": true,
+    "autotuning": "normal",
+    "nagle": false
+  }
+}

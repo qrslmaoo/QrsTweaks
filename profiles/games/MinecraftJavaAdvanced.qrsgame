@@ -1,0 +1,13 @@
+{
+  "type": "game_profile",
+  "game": "Minecraft",
+  "description": "Advanced low-latency profile for Java PvP and large servers.",
+  "actions": {
+    "priority": "ABOVE_NORMAL",
+    "affinity": "recommended",
+    "clean_directx_cache": true,
+    "ctcp": true,
+    "autotuning": "normal",
+    "nagle": false
+  }
+}

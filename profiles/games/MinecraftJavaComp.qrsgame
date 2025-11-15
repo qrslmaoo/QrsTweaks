@@ -1,0 +1,9 @@
+{
+  "type": "game_profile",
+  "game": "Minecraft",
+  "description": "Optimized for PvP, anarchy servers, and Java latency.",
+  "actions": {
+    "priority": "ABOVE_NORMAL",
+    "affinity": "recommended"
+  }
+}

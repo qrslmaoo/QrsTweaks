@@ -1,0 +1,9 @@
+{
+  "type": "game_profile",
+  "game": "Valorant",
+  "description": "Stable frame pacing & no network spikes.",
+  "actions": {
+    "priority": "ABOVE_NORMAL",
+    "affinity": "recommended"
+  }
+}

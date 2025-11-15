@@ -1,0 +1,19 @@
+{
+  "type": "game_profile",
+  "game": "Fortnite",
+  "description": "Advanced preset for comp players: low latency, zero stutter, pre-clean pipeline.",
+  "actions": {
+    "disable_game_bar": true,
+    "disable_game_dvr": true,
+    "clean_shader_cache": true,
+    "clean_logs": true,
+    "clean_directx_cache": true,
+    "priority": "HIGH",
+    "affinity": "recommended",
+    "ctcp": true,
+    "autotuning": "restricted",
+    "nagle": false,
+    "disable_sys_overlays": true,
+    "prelaunch_cleanup": ["directx", "shadercaches", "temp"]
+  }
+}

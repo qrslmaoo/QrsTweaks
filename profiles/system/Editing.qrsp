@@ -1,0 +1,13 @@
+{
+  "type": "system_profile",
+  "name": "Video Editing",
+  "description": "Optimized for Adobe Premiere, Vegas, Resolve.",
+  "power_plan": "high_performance",
+  "network": {
+    "autotuning": "normal",
+    "ctcp": false
+  },
+  "ui": {
+    "open_this_pc": true
+  }
+}
