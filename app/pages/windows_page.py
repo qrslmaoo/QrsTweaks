@@ -1,25 +1,17 @@
 # app/pages/windows_page.py
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTextEdit, QLabel, QScrollArea, QFileDialog, QCheckBox
+    QTextEdit, QLabel, QScrollArea, QFileDialog
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 
 from app.ui.widgets.card import Card
-    # Basic card container
 from app.ui.widgets.toggle import Toggle
 from app.ui.widgets.glow_indicator import GlowIndicator
 from app.ui.widgets.divider import Divider
 from app.ui.animations import fade_in, slide_in_y
 
 from src.qrs.modules.windows_optim import WindowsOptimizer
-from src.qrs.service.autostart import AutostartManager
-from src.qrs.service.controller import (
-    start_daemon,
-    stop_daemon,
-    restart_daemon,
-    daemon_running,
-)
 
 
 class WindowsPage(QWidget):
@@ -27,9 +19,8 @@ class WindowsPage(QWidget):
         super().__init__(parent)
         self.setStyleSheet("background: transparent;")
 
-        # Core backend objects
+        # Core backend object
         self.opt = WindowsOptimizer()
-        self.autostart = AutostartManager()
 
         # ----------------------------------------
         # Scroll wrapper
@@ -200,7 +191,7 @@ class WindowsPage(QWidget):
         root.addWidget(prof)
 
         # ----------------------------------------
-        # ADVANCED TOOLS (NEW)
+        # ADVANCED TOOLS
         # ----------------------------------------
 
         # ----- System RepairOps -----
@@ -256,6 +247,11 @@ class WindowsPage(QWidget):
         self.btn_ui_show_ext = QPushButton("Show File Extensions")
         self.btn_ui_restore_ui = QPushButton("Restore UI Defaults")
 
+        # NEW: Phase 7D tools
+        self.btn_ui_restart_explorer = QPushButton("Restart Explorer (Taskbar Fix)")
+        self.btn_ui_clear_icons = QPushButton("Rebuild Icon Cache")
+        self.btn_ui_repair_start = QPushButton("Repair Start Menu Shell")
+
         for b in (
             self.btn_ui_disable_bing,
             self.btn_ui_disable_widgets,
@@ -263,6 +259,9 @@ class WindowsPage(QWidget):
             self.btn_ui_explorer_thispc,
             self.btn_ui_show_ext,
             self.btn_ui_restore_ui,
+            self.btn_ui_restart_explorer,
+            self.btn_ui_clear_icons,
+            self.btn_ui_repair_start,
         ):
             b.setMinimumHeight(34)
             uv.addWidget(b)
@@ -287,39 +286,6 @@ class WindowsPage(QWidget):
 
         root.addWidget(backup_card)
 
-        # ----- Background Service (Phase 11) -----
-        svc_card = Card("Background Service")
-        svcv = svc_card.body()
-
-        row_status = QHBoxLayout()
-        self.lbl_svc_status = QLabel("Service status: unknown")
-        self.lbl_svc_status.setStyleSheet("color:#DDE1EA;")
-        self.ind_svc = GlowIndicator()
-        self.ind_svc.setFixedSize(14, 14)
-
-        row_status.addWidget(self.lbl_svc_status)
-        row_status.addStretch()
-        row_status.addWidget(self.ind_svc)
-
-        row_buttons = QHBoxLayout()
-        self.btn_svc_start = QPushButton("Start Service")
-        self.btn_svc_stop = QPushButton("Stop Service")
-        self.btn_svc_restart = QPushButton("Restart")
-
-        row_buttons.addWidget(self.btn_svc_start)
-        row_buttons.addWidget(self.btn_svc_stop)
-        row_buttons.addWidget(self.btn_svc_restart)
-        row_buttons.addStretch()
-
-        self.chk_svc_autostart = QCheckBox("Start service automatically with Windows")
-        self.chk_svc_autostart.setStyleSheet("color:#DDE1EA;")
-
-        svcv.addLayout(row_status)
-        svcv.addLayout(row_buttons)
-        svcv.addWidget(self.chk_svc_autostart)
-
-        root.addWidget(svc_card)
-
         # Final stretch so content hugs the top
         root.addStretch()
 
@@ -328,16 +294,8 @@ class WindowsPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(scroll)
 
-        # Timer for periodic status refresh
-        self._svc_timer = QTimer(self)
-        self._svc_timer.setInterval(5000)  # 5 seconds
-        self._svc_timer.timeout.connect(self._svc_refresh_status)
-
         # wire everything
         self._connect()
-
-        # Initial service state
-        self._init_service_status()
 
     # ----------------------------------------
     # SIGNAL CONNECTIONS
@@ -407,71 +365,14 @@ class WindowsPage(QWidget):
         self.btn_ui_show_ext.clicked.connect(self._ui_show_ext)
         self.btn_ui_restore_ui.clicked.connect(self._ui_restore_ui)
 
+        self.btn_ui_restart_explorer.clicked.connect(self._ui_restart_explorer)
+        self.btn_ui_clear_icons.clicked.connect(self._ui_clear_icon_cache)
+        self.btn_ui_repair_start.clicked.connect(self._ui_repair_start_menu)
+
         # advanced tools: Backup
         self.btn_backup_create.clicked.connect(self._backup_create)
         self.btn_backup_restore.clicked.connect(self._backup_restore)
         self.btn_backup_open.clicked.connect(self._backup_open)
-
-        # background service
-        self.btn_svc_start.clicked.connect(self._svc_start)
-        self.btn_svc_stop.clicked.connect(self._svc_stop)
-        self.btn_svc_restart.clicked.connect(self._svc_restart)
-        self.chk_svc_autostart.toggled.connect(self._svc_autostart_changed)
-
-    # ----------------------------------------
-    # SERVICE STATUS INIT / REFRESH
-    # ----------------------------------------
-    def _init_service_status(self):
-        # autostart checkbox
-        try:
-            self.chk_svc_autostart.setChecked(self.autostart.is_enabled())
-        except Exception as e:
-            self.log.append(f"[Service] Failed to read autostart state: {e!r}")
-
-        # initial status + start timer
-        self._svc_refresh_status()
-        self._svc_timer.start()
-
-    def _svc_refresh_status(self):
-        running, _detail = daemon_running()
-
-        if running:
-            self.lbl_svc_status.setText("Service status: running")
-            self.ind_svc.setColor("#44dd44")
-            self.ind_svc.setEnabled(True)
-        else:
-            self.lbl_svc_status.setText("Service status: stopped")
-            self.ind_svc.setColor("#888888")
-            self.ind_svc.setEnabled(False)
-
-    # ----------------------------------------
-    # SERVICE ACTIONS
-    # ----------------------------------------
-    def _svc_start(self):
-        ok, msg = start_daemon()
-        prefix = "[Service] Started: " if ok else "[Service] Start failed: "
-        self.log.append(prefix + msg)
-        self._svc_refresh_status()
-
-    def _svc_stop(self):
-        ok, msg = stop_daemon()
-        prefix = "[Service] Stopped: " if ok else "[Service] Stop failed: "
-        self.log.append(prefix + msg)
-        self._svc_refresh_status()
-
-    def _svc_restart(self):
-        ok, msg = restart_daemon()
-        prefix = "[Service] Restarted: " if ok else "[Service] Restart failed: "
-        self.log.append(prefix + msg)
-        self._svc_refresh_status()
-
-    def _svc_autostart_changed(self, checked: bool):
-        ok, msg = self.autostart.set_enabled(checked)
-        prefix = "[Service] Autostart "
-        prefix += "enabled: " if checked else "disabled: "
-        if not ok:
-            prefix = "[Service] Autostart change failed: "
-        self.log.append(prefix + msg)
 
     # ----------------------------------------
     # EXISTING LOGIC
@@ -710,6 +611,18 @@ class WindowsPage(QWidget):
 
     def _ui_restore_ui(self):
         ok, msg = self.opt.ui_restore_defaults()
+        self.log.append(msg)
+
+    def _ui_restart_explorer(self):
+        ok, msg = self.opt.ui_restart_explorer()
+        self.log.append(msg)
+
+    def _ui_clear_icon_cache(self):
+        ok, msg = self.opt.ui_clear_icon_cache()
+        self.log.append(msg)
+
+    def _ui_repair_start_menu(self):
+        ok, msg = self.opt.ui_repair_start_menu()
         self.log.append(msg)
 
     # ----- ADVANCED TOOLS: BACKUP & RESTORE -----
