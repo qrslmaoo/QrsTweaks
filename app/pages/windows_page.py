@@ -1,5 +1,4 @@
 # app/pages/windows_page.py
-
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTextEdit, QLabel, QScrollArea, QFileDialog
@@ -9,9 +8,7 @@ from PySide6.QtCore import Qt
 from app.ui.widgets.card import Card
 from app.ui.widgets.toggle import Toggle
 from app.ui.widgets.glow_indicator import GlowIndicator
-from app.ui.widgets.divider import Divider  # kept in case you use it later
-
-from app.ui.animations import fade_in, slide_in_y  # safe to keep; no behavior change
+from app.ui.widgets.divider import Divider
 
 from src.qrs.modules.windows_optim import WindowsOptimizer
 
@@ -21,12 +18,10 @@ class WindowsPage(QWidget):
         super().__init__(parent)
         self.setStyleSheet("background: transparent;")
 
-        # Core backend object
+        # backend
         self.opt = WindowsOptimizer()
 
-        # ----------------------------------------
-        # Scroll wrapper
-        # ----------------------------------------
+        # SCROLL WRAPPER
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -38,21 +33,17 @@ class WindowsPage(QWidget):
         scroll.setWidget(container)
 
         root = QVBoxLayout(container)
-        root.setContentsMargins(10, 10, 10, 10)
+        root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(16)
 
-        # ----------------------------------------
-        # HEADER
-        # ----------------------------------------
+        # TITLE
         title = QLabel("Windows Optimizer")
         title.setStyleSheet("font-size: 22pt; color: #DDE1EA; font-weight:700;")
         root.addWidget(title)
 
-        # ----------------------------------------
         # SYSTEM SCAN
-        # ----------------------------------------
         scan = Card("System Scan")
-        sv = scan.body()
+        v = scan.body()
 
         head = QHBoxLayout()
         self.btn_scan = QPushButton("Run Quick Scan")
@@ -62,18 +53,16 @@ class WindowsPage(QWidget):
         head.addWidget(self.btn_scan)
         head.addStretch()
         head.addWidget(self.spinner)
-        sv.addLayout(head)
+        v.addLayout(head)
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(200)
-        sv.addWidget(self.log)
+        v.addWidget(self.log)
 
         root.addWidget(scan)
 
-        # ----------------------------------------
-        # ROW 1  (Power / Cleanup / Safety)
-        # ----------------------------------------
+        # ROW 1 ----------------------------------
         row1 = QHBoxLayout()
         row1.setSpacing(12)
 
@@ -104,9 +93,7 @@ class WindowsPage(QWidget):
         row1.addWidget(safety)
         root.addLayout(row1)
 
-        # ----------------------------------------
-        # ROW 2  (MemLeak / Network / Startup)
-        # ----------------------------------------
+        # ROW 2 ----------------------------------
         row2 = QHBoxLayout()
         row2.setSpacing(12)
 
@@ -150,9 +137,7 @@ class WindowsPage(QWidget):
         row2.addWidget(startup)
         root.addLayout(row2)
 
-        # ----------------------------------------
-        # STORAGE ANALYZER
-        # ----------------------------------------
+        # STORAGE ANALYZER ------------------------
         storage = Card("Storage Analyzer")
         st = storage.body()
 
@@ -168,9 +153,7 @@ class WindowsPage(QWidget):
 
         root.addWidget(storage)
 
-        # ----------------------------------------
-        # PROFILE MANAGER
-        # ----------------------------------------
+        # PROFILE MANAGER -------------------------
         prof = Card("Profile Manager")
         pf = prof.body()
 
@@ -192,11 +175,7 @@ class WindowsPage(QWidget):
 
         root.addWidget(prof)
 
-        # ----------------------------------------
-        # ADVANCED TOOLS
-        # ----------------------------------------
-
-        # ----- System RepairOps -----
+        # ADVANCED TOOLS --------------------------
         repair_card = Card("System RepairOps")
         rv = repair_card.body()
 
@@ -216,7 +195,7 @@ class WindowsPage(QWidget):
 
         root.addWidget(repair_card)
 
-        # ----- Safe Debloat -----
+        # DEBLOAT
         debloat_card = Card("Safe Debloat")
         dv = debloat_card.body()
 
@@ -238,7 +217,7 @@ class WindowsPage(QWidget):
 
         root.addWidget(debloat_card)
 
-        # ----- Taskbar / Explorer UI Tweaks -----
+        # UI TWEAKS
         ui_card = Card("Taskbar & Explorer Tweaks")
         uv = ui_card.body()
 
@@ -262,7 +241,7 @@ class WindowsPage(QWidget):
 
         root.addWidget(ui_card)
 
-        # ----- Backup & Restore -----
+        # BACKUP
         backup_card = Card("Backup & Restore")
         bv = backup_card.body()
 
@@ -280,20 +259,15 @@ class WindowsPage(QWidget):
 
         root.addWidget(backup_card)
 
-        # Final stretch so content hugs the top
         root.addStretch()
 
-        # attach scroll to main layout
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(scroll)
 
-        # wire everything
         self._connect()
 
-    # ----------------------------------------
-    # SIGNAL CONNECTIONS
-    # ----------------------------------------
+    # SIGNALS ------------------------------------
     def _connect(self):
         # scan
         self.btn_scan.clicked.connect(self._scan)
@@ -338,20 +312,20 @@ class WindowsPage(QWidget):
         self.btn_prof_save.clicked.connect(self._save_profile)
         self.btn_prof_load.clicked.connect(self._load_profile)
 
-        # advanced tools: RepairOps
+        # repairops
         self.btn_repair_wu.clicked.connect(self._repair_wu)
         self.btn_reset_net.clicked.connect(self._reset_net)
         self.btn_dism_sfc.clicked.connect(self._run_dism_sfc)
         self.btn_reset_store.clicked.connect(self._reset_store_cache)
 
-        # advanced tools: Debloat
+        # debloat
         self.btn_debloat_xbox.clicked.connect(self._debloat_xbox)
         self.btn_debloat_bg.clicked.connect(self._debloat_bg_apps)
         self.btn_debloat_telemetry.clicked.connect(self._debloat_telemetry)
         self.btn_debloat_cortana.clicked.connect(self._debloat_cortana)
         self.btn_debloat_revert.clicked.connect(self._debloat_revert)
 
-        # advanced tools: UI tweaks
+        # ui tweaks
         self.btn_ui_disable_bing.clicked.connect(self._ui_disable_bing)
         self.btn_ui_disable_widgets.clicked.connect(self._ui_disable_widgets)
         self.btn_ui_disable_chat.clicked.connect(self._ui_disable_chat)
@@ -359,14 +333,13 @@ class WindowsPage(QWidget):
         self.btn_ui_show_ext.clicked.connect(self._ui_show_ext)
         self.btn_ui_restore_ui.clicked.connect(self._ui_restore_ui)
 
-        # advanced tools: Backup
+        # backup
         self.btn_backup_create.clicked.connect(self._backup_create)
         self.btn_backup_restore.clicked.connect(self._backup_restore)
         self.btn_backup_open.clicked.connect(self._backup_open)
 
-    # ----------------------------------------
-    # EXISTING LOGIC
-    # ----------------------------------------
+    # LOGIC --------------------------------------
+
     def _scan(self):
         self.spinner.show()
         self.log.clear()
@@ -428,7 +401,7 @@ class WindowsPage(QWidget):
         for loc, name, val in items:
             self.log.append(f"- {name} → {val}")
 
-    # ----- STORAGE ANALYZER -----
+    # STORAGE
     def _analyze_drive(self):
         result = self.opt.analyze_drive()
         self.log.append(result)
@@ -445,7 +418,7 @@ class WindowsPage(QWidget):
         result = self.opt.clear_cache()
         self.log.append(result)
 
-    # ----- PROFILE MANAGER: BUILT-IN PROFILES -----
+    # PROFILES
     def _apply_profile(self, name: str):
         msgs = []
 
@@ -478,7 +451,7 @@ class WindowsPage(QWidget):
                 ok, m = self.opt.toggle_nagle(True)
                 msgs.append(f"[Nagle] {m}")
             except TypeError:
-                msgs.append("[Nagle] Left at current setting (backend toggle is one-way)")
+                msgs.append("[Nagle] Left at current setting")
 
             header = "[Profile] Applied Productivity preset"
 
@@ -502,11 +475,7 @@ class WindowsPage(QWidget):
         for line in msgs:
             self.log.append("  " + line)
 
-    # ----- PROFILE MANAGER: EXPORT / IMPORT -----
     def _save_profile(self):
-        """
-        Export current system-oriented state to a .qrsp JSON file.
-        """
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save QrsTweaks Profile",
@@ -524,9 +493,6 @@ class WindowsPage(QWidget):
             self.log.append(f"[Profile] Save failed: {msg}")
 
     def _load_profile(self):
-        """
-        Import a .qrsp JSON file and apply it.
-        """
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load QrsTweaks Profile",
@@ -540,7 +506,7 @@ class WindowsPage(QWidget):
         ok, msg = self.opt.import_profile(path)
         self.log.append(msg)
 
-    # ----- ADVANCED TOOLS: REPAIR OPS -----
+    # REPAIR OPS
     def _repair_wu(self):
         ok, msg = self.opt.repair_windows_update()
         self.log.append(msg)
@@ -557,7 +523,7 @@ class WindowsPage(QWidget):
         ok, msg = self.opt.reset_store_cache()
         self.log.append(msg)
 
-    # ----- ADVANCED TOOLS: DEBLOAT -----
+    # DEBLOAT
     def _debloat_xbox(self):
         ok, msg = self.opt.debloat_xbox_gamebar()
         self.log.append(msg)
@@ -578,7 +544,7 @@ class WindowsPage(QWidget):
         ok, msg = self.opt.debloat_revert_safe()
         self.log.append(msg)
 
-    # ----- ADVANCED TOOLS: UI TWEAKS -----
+    # UI TWEAKS
     def _ui_disable_bing(self):
         ok, msg = self.opt.ui_disable_bing_search()
         self.log.append(msg)
@@ -603,7 +569,7 @@ class WindowsPage(QWidget):
         ok, msg = self.opt.ui_restore_defaults()
         self.log.append(msg)
 
-    # ----- ADVANCED TOOLS: BACKUP & RESTORE -----
+    # BACKUP
     def _backup_create(self):
         ok, msg = self.opt.create_backup_snapshot()
         self.log.append(msg)
